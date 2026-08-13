@@ -114,9 +114,11 @@ extension BottleSettings {
         }
         if avxEnabled { env["ROSETTA_ADVERTISE_AVX"] = "1" }
         if metalHUD { env["MTL_HUD_ENABLED"] = "1" }
-        if graphicsBackend == .dxvk {
-            env["WINEDLLOVERRIDES"] = "dxgi,d3d9,d3d10core,d3d11=n,b"
-            if dxvkAsync { env["DXVK_ASYNC"] = "1" }
+        if let overrides = GraphicsBackendDeployer.dllOverrides(for: graphicsBackend) {
+            env["WINEDLLOVERRIDES"] = overrides
+        }
+        if graphicsBackend == .dxvk, dxvkAsync {
+            env["DXVK_ASYNC"] = "1"
         }
         return env
     }

@@ -130,9 +130,11 @@ struct BottleDetailView: View {
             Section("Graphics") {
                 Picker("Backend", selection: $draft.graphicsBackend) {
                     Text("DXMT").tag(GraphicsBackend.dxmt)
-                    Text("D3DMetal (GPTK)").tag(GraphicsBackend.d3dMetal)
                     Text("DXVK").tag(GraphicsBackend.dxvk)
                 }
+                Text("DXMT translates Direct3D 11 to Metal and is the recommended default. D3DMetal (Apple GPTK) support arrives with the 4.0 runtime.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Toggle("Metal HUD", isOn: $draft.metalHUD)
                 Toggle("Retina Mode", isOn: $draft.retinaMode)
                 Picker("Scaling (DPI)", selection: $draft.dpi) {

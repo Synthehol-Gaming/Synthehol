@@ -70,6 +70,9 @@ final class AppModel {
             defer { busyBottleIDs.remove(bottle.id) }
             try await executor.initializePrefix(for: bottle)
             try await executor.applyRegistrySettings(for: bottle)
+            try GraphicsBackendDeployer.apply(
+                bottle.settings.graphicsBackend, runtime: executor.runtime, bottle: bottle
+            )
             await refresh()
         } catch {
             lastError = "Couldn't create bottle: \(error.localizedDescription)"
@@ -110,6 +113,11 @@ final class AppModel {
             defer { busyBottleIDs.remove(bottle.id) }
             if settings.windowsVersion != oldVersion {
                 try await executor.changeWindowsVersion(settings.windowsVersion, bottle: updated)
+            }
+            if settings.graphicsBackend != bottle.settings.graphicsBackend {
+                try GraphicsBackendDeployer.apply(
+                    settings.graphicsBackend, runtime: executor.runtime, bottle: updated
+                )
             }
             try await executor.applyRegistrySettings(for: updated)
         } catch {

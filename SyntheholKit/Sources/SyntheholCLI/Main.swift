@@ -81,6 +81,18 @@ struct Main {
             print("Steam launching — sign in through the Steam window.")
             print("(watching for exit; the bottle shuts down when Steam closes)")
             await monitor.value
+        case "backend" where args.count >= 3:
+            guard let backend = GraphicsBackend(rawValue: args[2]) else {
+                fputs("unknown backend \(args[2]) — use dxmt or dxvk\n", stderr)
+                exit(1)
+            }
+            let bottle = try Bottle.load(from: URL(filePath: args[1]))
+            let executor = try await currentExecutor()
+            try GraphicsBackendDeployer.apply(backend, runtime: executor.runtime, bottle: bottle)
+            var updated = bottle
+            updated.settings.graphicsBackend = backend
+            try updated.saveSettings()
+            print("Deployed \(backend.rawValue) into \(bottle.settings.name)")
         case "games" where args.count >= 2:
             let bottle = try Bottle.load(from: URL(filePath: args[1]))
             for game in try SteamStore().installedGames(in: bottle) {
@@ -131,6 +143,9 @@ struct Main {
         print("Created \(bottle.url.path(percentEncoded: false)); initializing prefix…")
         try await executor.initializePrefix(for: bottle)
         try await executor.applyRegistrySettings(for: bottle)
-        print("Bottle \"\(name)\" ready (Windows \(bottle.settings.windowsVersion.rawValue)).")
+        try GraphicsBackendDeployer.apply(
+            bottle.settings.graphicsBackend, runtime: executor.runtime, bottle: bottle
+        )
+        print("Bottle \"\(name)\" ready (Windows \(bottle.settings.windowsVersion.rawValue), \(bottle.settings.graphicsBackend.rawValue)).")
     }
 }
