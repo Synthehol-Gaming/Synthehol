@@ -36,32 +36,45 @@ struct LibraryView: View {
                         }
                     }
                 }
-            } else if games.isEmpty {
-                ContentUnavailableView {
-                    Label("No Games Installed", systemImage: "gamecontroller")
-                } description: {
-                    Text("Install games through the Steam client. They appear here automatically.")
-                } actions: {
-                    Button("Launch Steam") { model.launchSteam(in: bottle) }
-                        .buttonStyle(.borderedProminent)
-                }
             } else {
                 ScrollView {
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 20)],
-                        spacing: 24
-                    ) {
-                        ForEach(games) { game in
-                            GameTile(
-                                game: game,
-                                bottle: bottle,
-                                onSettings: { settingsGame = game },
-                                onArtwork: { artworkGame = game },
-                                onUninstall: { uninstallCandidate = game }
-                            )
+                    VStack(alignment: .leading, spacing: 24) {
+                        if games.isEmpty {
+                            VStack(spacing: 10) {
+                                Label("No Games Installed", systemImage: "gamecontroller")
+                                    .font(.title3)
+                                    .foregroundStyle(.secondary)
+                                Text("Install games below or through the Steam client — they appear here automatically.")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                Button("Launch Steam") { model.launchSteam(in: bottle) }
+                                    .buttonStyle(.borderedProminent)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 30)
+                        } else {
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 20)],
+                                spacing: 24
+                            ) {
+                                ForEach(games) { game in
+                                    GameTile(
+                                        game: game,
+                                        bottle: bottle,
+                                        onSettings: { settingsGame = game },
+                                        onArtwork: { artworkGame = game },
+                                        onUninstall: { uninstallCandidate = game }
+                                    )
+                                }
+                            }
                         }
+
+                        availableSection
                     }
                     .padding(20)
+                }
+                .task(id: bottle.id) {
+                    await model.refreshOwnedGames(in: bottle)
                 }
             }
         }
@@ -88,6 +101,111 @@ struct LibraryView: View {
         } message: {
             Text("Steam will open and ask you to confirm. Steam removes the game's files; the tile disappears once the uninstall completes.")
         }
+    }
+}
+
+extension LibraryView {
+    @ViewBuilder
+    var availableSection: some View {
+        let available = model.ownedGames[bottle.id] ?? []
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Available to Install")
+                    .font(.title3.bold())
+                if model.loadingOwnedGames.contains(bottle.id) {
+                    ProgressView().controlSize(.small)
+                }
+                Spacer()
+                Button("Refresh", systemImage: "arrow.clockwise") {
+                    Task { await model.refreshOwnedGames(in: bottle) }
+                }
+                .labelStyle(.iconOnly)
+            }
+            if let error = model.ownedGamesError[bottle.id] {
+                Text(error)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else if available.isEmpty && !model.loadingOwnedGames.contains(bottle.id) {
+                Text("Everything you own is installed.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 16)],
+                spacing: 18
+            ) {
+                ForEach(available) { game in
+                    AvailableGameTile(game: game, bottle: bottle)
+                }
+            }
+        }
+    }
+}
+
+/// A dimmed poster tile for an owned-but-not-installed game.
+struct AvailableGameTile: View {
+    @Environment(AppModel.self) private var model
+    let game: InstalledGame
+    let bottle: Bottle
+
+    @State private var hovering = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Color.clear
+                .aspectRatio(2 / 3, contentMode: .fit)
+                .overlay {
+                    if let poster = model.posterImages[game.id] {
+                        Image(nsImage: poster)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .opacity(hovering ? 0.9 : 0.5)
+                            .grayscale(hovering ? 0 : 0.6)
+                    } else {
+                        LinearGradient(
+                            colors: [.gray.opacity(0.4), .gray.opacity(0.25)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                        .overlay {
+                            Text(game.name)
+                                .font(.callout.bold())
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(6)
+                        }
+                    }
+                }
+                .overlay {
+                    if hovering {
+                        Button {
+                            model.installOwnedGame(game, in: bottle)
+                        } label: {
+                            Label("Install", systemImage: "arrow.down.circle.fill")
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(.black.opacity(0.65), in: Capsule())
+                                .foregroundStyle(.white)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator, lineWidth: 1))
+
+            Text(game.name)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .onHover { hovering = $0 }
+        .task(id: game.id) {
+            _ = await model.poster(for: game, in: bottle)
+        }
+        .contextMenu {
+            Button("Install via Steam") { model.installOwnedGame(game, in: bottle) }
+        }
+        .help(game.name)
     }
 }
 

@@ -147,6 +147,22 @@ public struct SteamInstaller: Sendable {
         )
     }
 
+    /// Asks Steam to install an owned game (`steam://install/<appid>`): Steam
+    /// shows its install dialog (drive/size/shortcuts) and downloads the game;
+    /// the library picks it up via the steamapps watcher once installed.
+    @discardableResult
+    public func requestInstall(
+        appID: String,
+        in bottle: Bottle,
+        executor: WineExecutor
+    ) -> Task<Void, Never> {
+        launch(
+            in: bottle,
+            executor: executor,
+            arguments: ["steam://install/\(appID)"]
+        )
+    }
+
     /// Asks Steam to uninstall a game (`steam://uninstall/<appid>`): Steam
     /// shows its own confirmation and removes the files/manifest itself —
     /// Synthehol never deletes game files behind Steam's back. The library

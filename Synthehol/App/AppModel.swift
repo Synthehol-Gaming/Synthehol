@@ -19,6 +19,9 @@ final class AppModel {
     var steamProgress: [Bottle.ID: SteamInstaller.Progress] = [:]
     var installedGames: [Bottle.ID: [InstalledGame]] = [:]
     var steamRunning: Set<Bottle.ID> = []
+    var ownedGames: [Bottle.ID: [InstalledGame]] = [:]
+    var ownedGamesError: [Bottle.ID: String] = [:]
+    var loadingOwnedGames: Set<Bottle.ID> = []
     var lastError: String?
 
     private let artworkCache = ArtworkCache()
@@ -250,6 +253,54 @@ final class AppModel {
         }
     }
 
+    /// Loads the signed-in account's owned-but-not-installed games from the
+    /// Steam community profile (no API key; requires public game details).
+    func refreshOwnedGames(in bottle: Bottle) async {
+        guard bottle.settings.steamInstalled else { return }
+        guard let user = SteamStore().loginUsers(in: bottle).first else {
+            ownedGamesError[bottle.id] = "Sign in to Steam once to see your library here."
+            return
+        }
+        loadingOwnedGames.insert(bottle.id)
+        defer { loadingOwnedGames.remove(bottle.id) }
+        ownedGamesError[bottle.id] = nil
+        do {
+            let owned = try await SteamOwnedGamesFetcher().ownedGames(steamID64: user.steamID64)
+            let installedIDs = Set((installedGames[bottle.id] ?? []).map(\.storeGameID))
+            ownedGames[bottle.id] = owned
+                .filter { !SteamStore.nonGameAppIDs.contains($0.appID) }
+                .filter { !installedIDs.contains(String($0.appID)) }
+                .map { game in
+                    InstalledGame(
+                        store: SteamStore.storeID,
+                        storeGameID: String(game.appID),
+                        name: game.name,
+                        posterURL: URL(string: "https://steamcdn-a.akamaihd.net/steam/apps/\(game.appID)/library_600x900_2x.jpg")
+                    )
+                }
+        } catch SteamOwnedGamesFetcher.FetchError.profileUnavailable(let message) {
+            ownedGamesError[bottle.id] =
+                "Steam says: \(message) To browse your library here, set Privacy ▸ Game details to Public in your Steam profile."
+        } catch {
+            ownedGamesError[bottle.id] = "Couldn't load your Steam library right now."
+        }
+    }
+
+    /// Triggers Steam's install flow for an owned game.
+    func installOwnedGame(_ game: InstalledGame, in bottle: Bottle) {
+        guard let executor else { return }
+        steamRunning.insert(bottle.id)
+        activateNewWineWindows()
+        let monitor = SteamInstaller().requestInstall(
+            appID: game.storeGameID, in: bottle, executor: executor
+        )
+        Task { [weak self] in
+            await monitor.value
+            self?.steamRunning.remove(bottle.id)
+            self?.refreshGames(in: bottle)
+        }
+    }
+
     /// Triggers Steam's own uninstall flow for a game (Steam shows the
     /// confirmation dialog and removes the files).
     func uninstallGame(_ game: InstalledGame, in bottle: Bottle) {
@@ -311,6 +362,9 @@ final class AppModel {
     /// Refreshes the installed-games list and keeps the steamapps watcher alive.
     func refreshGames(in bottle: Bottle) {
         installedGames[bottle.id] = (try? SteamStore().installedGames(in: bottle)) ?? []
+        // Newly installed games leave the available-to-install list.
+        let installedIDs = Set((installedGames[bottle.id] ?? []).map(\.storeGameID))
+        ownedGames[bottle.id]?.removeAll { installedIDs.contains($0.storeGameID) }
         startWatchingIfNeeded(bottle)
     }
 
