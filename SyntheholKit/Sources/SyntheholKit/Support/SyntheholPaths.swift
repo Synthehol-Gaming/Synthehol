@@ -1,6 +1,17 @@
 import Foundation
 
 /// Well-known filesystem locations for Synthehol data.
+extension URL {
+    /// Standardized path without trailing slashes, for comparing directory
+    /// URLs from different sources (`URL(filePath:)` appends a trailing slash
+    /// for existing directories; registry strings and URL query params don't).
+    public var canonicalPath: String {
+        var path = standardizedFileURL.path(percentEncoded: false)
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+}
+
 public enum SyntheholPaths {
     public static let bundleIdentifier = "com.colinobrien.Synthehol"
 

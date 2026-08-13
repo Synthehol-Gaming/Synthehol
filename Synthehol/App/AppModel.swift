@@ -39,6 +39,58 @@ final class AppModel {
         runtime = await runtimeStore.current()
         bottles = await bottleStore.bottles()
         if selectedBottleID == nil { selectedBottleID = bottles.first?.id }
+        WineLogWriter.deleteOldLogs()
+    }
+
+    // MARK: Launcher URLs (synthehol://launch?bottle=…&store=…&game=…)
+
+    func handleLaunchURL(_ url: URL) async {
+        guard url.scheme == "synthehol", url.host() == "launch",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return }
+        let params = Dictionary(
+            uniqueKeysWithValues: (components.queryItems ?? [])
+                .compactMap { item in item.value.map { (item.name, $0) } }
+        )
+        guard let bottlePath = params["bottle"],
+              let store = params["store"],
+              let gameID = params["game"]
+        else {
+            lastError = "Invalid launcher link."
+            return
+        }
+        await refresh()
+        let canonical = URL(filePath: bottlePath).canonicalPath
+        guard let bottle = bottles.first(where: {
+            $0.url.canonicalPath == canonical
+        }) else {
+            lastError = "This launcher points to a bottle Synthehol no longer knows about."
+            return
+        }
+        selectedBottleID = bottle.id
+        refreshGames(in: bottle)
+        guard let game = installedGames[bottle.id]?.first(where: {
+            $0.store == store && $0.storeGameID == gameID
+        }) else {
+            lastError = "The game for this launcher is no longer installed in \"\(bottle.settings.name)\"."
+            return
+        }
+        launchGame(game, in: bottle)
+    }
+
+    /// Exports a `.app` launcher for a game with its poster as the icon.
+    func exportLauncher(for game: InstalledGame, in bottle: Bottle) async {
+        do {
+            let appURL = try LauncherExporter.export(game: game, bottle: bottle)
+            if let poster = await poster(for: game, in: bottle) {
+                NSWorkspace.shared.setIcon(
+                    poster, forFile: appURL.path(percentEncoded: false)
+                )
+            }
+            NSWorkspace.shared.activateFileViewerSelecting([appURL])
+        } catch {
+            lastError = "Couldn't create launcher: \(error.localizedDescription)"
+        }
     }
 
     // MARK: Runtime

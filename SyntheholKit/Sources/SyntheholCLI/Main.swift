@@ -93,6 +93,15 @@ struct Main {
             updated.settings.graphicsBackend = backend
             try updated.saveSettings()
             print("Deployed \(backend.rawValue) into \(bottle.settings.name)")
+        case "launcher" where args.count >= 3:
+            let bottle = try Bottle.load(from: URL(filePath: args[1]))
+            let games = try SteamStore().installedGames(in: bottle)
+            guard let game = games.first(where: { $0.storeGameID == args[2] }) else {
+                fputs("no installed game with appid \(args[2])\n", stderr)
+                exit(1)
+            }
+            let appURL = try LauncherExporter.export(game: game, bottle: bottle)
+            print(appURL.path(percentEncoded: false))
         case "games" where args.count >= 2:
             let bottle = try Bottle.load(from: URL(filePath: args[1]))
             for game in try SteamStore().installedGames(in: bottle) {

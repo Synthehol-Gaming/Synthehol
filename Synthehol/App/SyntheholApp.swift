@@ -19,7 +19,20 @@ struct SyntheholApp: App {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 900, minHeight: 600)
+                .onOpenURL { url in
+                    Task { await model.handleLaunchURL(url) }
+                }
         }
         .windowToolbarStyle(.unified)
+        .commands {
+            CommandGroup(after: .appSettings) {
+                Button("Open Logs Folder") {
+                    NSWorkspace.shared.open(SyntheholPaths.logs)
+                }
+                Button("Clear D3D Shader Caches") {
+                    Task { await ShaderCache.wipe() }
+                }
+            }
+        }
     }
 }

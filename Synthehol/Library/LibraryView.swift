@@ -100,6 +100,10 @@ struct GameTile: View {
         .contextMenu {
             Button("Play") { model.launchGame(game, in: bottle) }
             Button("Game Settings…") { onSettings() }
+            Divider()
+            Button("Create App Launcher…") {
+                Task { await model.exportLauncher(for: game, in: bottle) }
+            }
         }
         .help(game.name)
     }

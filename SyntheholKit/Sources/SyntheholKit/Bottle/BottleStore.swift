@@ -141,12 +141,6 @@ public actor BottleStore {
     /// Compares paths ignoring trailing slashes (URL(filePath:) adds one for
     /// existing directories) and `/private` symlink standardization.
     private func pathsEqual(_ stored: String, _ url: URL) -> Bool {
-        canonical(URL(filePath: stored)) == canonical(url)
-    }
-
-    private func canonical(_ url: URL) -> String {
-        var path = url.standardizedFileURL.path(percentEncoded: false)
-        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
-        return path
+        URL(filePath: stored).canonicalPath == url.canonicalPath
     }
 }

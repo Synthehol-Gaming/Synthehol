@@ -29,8 +29,13 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         ENABLE_HARDENED_RUNTIME: NO
         CODE_SIGN_ENTITLEMENTS: Synthehol/Synthehol.entitlements
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.games
-        INFOPLIST_KEY_NSPrincipalClass: NSApplication
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: A Windows application is trying to access the microphone.
-        INFOPLIST_KEY_NSCameraUsageDescription: A Windows application is trying to access the camera.
+    info:
+      path: Synthehol/Info.plist
+      properties:
+        LSApplicationCategoryType: public.app-category.games
+        NSPrincipalClass: NSApplication
+        NSMicrophoneUsageDescription: A Windows application is trying to access the microphone.
+        NSCameraUsageDescription: A Windows application is trying to access the camera.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.colinobrien.Synthehol.launch
+            CFBundleURLSchemes: [synthehol]

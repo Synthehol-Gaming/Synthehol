@@ -87,8 +87,29 @@ public struct SteamInstaller: Sendable {
             extraEnvironment: extraEnvironment
         )
         return Task.detached(priority: .utility) {
-            do { for try await _ in stream {} } catch {
+            let sessionLog = WineLogWriter(
+                label: "steam \(bottle.settings.name)",
+                header: [
+                    ("Bottle", bottle.url.path(percentEncoded: false)),
+                    ("Runtime", executor.runtime.version),
+                    ("Arguments", arguments.joined(separator: " "))
+                ]
+            )
+            defer { sessionLog?.close() }
+            do {
+                for try await event in stream {
+                    switch event {
+                    case .stdout(let text), .stderr(let text):
+                        sessionLog?.append(text)
+                    case .launched(let pid):
+                        sessionLog?.append("[launched pid \(pid)]")
+                    case .terminated(let code):
+                        sessionLog?.append("[exited \(code)]")
+                    }
+                }
+            } catch {
                 Log.steam.error("Steam launch stream failed: \(error, privacy: .public)")
+                sessionLog?.append("[launch failed: \(error)]")
                 return
             }
             // The waited-on process exited. Give a self-restarting bootstrapper
