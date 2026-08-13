@@ -49,6 +49,10 @@ public struct BottleSettings: Codable, Equatable, Sendable {
     public var metalHUD: Bool
     public var dxvkAsync: Bool
     public var retinaMode: Bool
+    /// Explicit Windows DPI (LogPixels). `nil` = automatic: 192 when Retina Mode
+    /// is on (2× scaling so UI is crisp *and* correctly sized on Retina
+    /// displays — with the Windows default of 96 everything renders half-size),
+    /// 96 otherwise.
     public var dpi: Int?
 
     public var steamInstalled: Bool
@@ -88,6 +92,11 @@ public struct BottleSettings: Codable, Equatable, Sendable {
 }
 
 extension BottleSettings {
+    /// The DPI actually written to the prefix (see `dpi`).
+    public var effectiveDPI: Int {
+        dpi ?? (retinaMode ? 192 : 96)
+    }
+
     /// Wine environment variables implied by these settings.
     ///
     /// Note: msync must also advertise ESYNC — D3DMetal detects ESYNC and changes

@@ -86,6 +86,17 @@ struct BottleSettingsTests {
         #expect(env["WINEESYNC"] == "1")
     }
 
+    @Test func effectiveDPIFollowsRetinaMode() {
+        var settings = BottleSettings(name: "DPI")
+        settings.retinaMode = true
+        settings.dpi = nil
+        #expect(settings.effectiveDPI == 192)
+        settings.retinaMode = false
+        #expect(settings.effectiveDPI == 96)
+        settings.dpi = 144
+        #expect(settings.effectiveDPI == 144)
+    }
+
     @Test func decodingUnknownFieldsFallsBackToDefaultsWithoutFailing() throws {
         // Simulates opening a bottle written by a newer/older Synthehol:
         // decode must migrate leniently, never reset (Whisky lesson).

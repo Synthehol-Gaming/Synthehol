@@ -167,14 +167,13 @@ public struct WineExecutor: Sendable {
             type: .string,
             bottle: bottle
         )
-        if let dpi = bottle.settings.dpi {
-            try await addRegistryKey(
-                #"HKCU\Control Panel\Desktop"#,
-                name: "LogPixels",
-                data: String(dpi),
-                type: .dword,
-                bottle: bottle
-            )
-        }
+        // Always written: Retina Mode without a matching DPI renders half-size.
+        try await addRegistryKey(
+            #"HKCU\Control Panel\Desktop"#,
+            name: "LogPixels",
+            data: String(bottle.settings.effectiveDPI),
+            type: .dword,
+            bottle: bottle
+        )
     }
 }

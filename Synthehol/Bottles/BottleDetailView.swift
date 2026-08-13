@@ -69,7 +69,7 @@ struct BottleDetailView: View {
                 Toggle("Metal HUD", isOn: $draft.metalHUD)
                 Toggle("Retina Mode", isOn: $draft.retinaMode)
                 Picker("Scaling (DPI)", selection: $draft.dpi) {
-                    Text("Default").tag(Int?.none)
+                    Text("Automatic (\(draft.retinaMode ? 192 : 96) dpi)").tag(Int?.none)
                     ForEach([96, 120, 144, 168, 192, 216, 240], id: \.self) { value in
                         Text("\(value) dpi").tag(Int?.some(value))
                     }
