@@ -147,6 +147,23 @@ public struct SteamInstaller: Sendable {
         )
     }
 
+    /// Asks Steam to uninstall a game (`steam://uninstall/<appid>`): Steam
+    /// shows its own confirmation and removes the files/manifest itself —
+    /// Synthehol never deletes game files behind Steam's back. The library
+    /// updates via the steamapps watcher when the manifest disappears.
+    @discardableResult
+    public func requestUninstall(
+        of game: InstalledGame,
+        in bottle: Bottle,
+        executor: WineExecutor
+    ) -> Task<Void, Never> {
+        launch(
+            in: bottle,
+            executor: executor,
+            arguments: ["steam://uninstall/\(game.storeGameID)"]
+        )
+    }
+
     /// Asks a running Steam client to exit cleanly (`steam.exe -shutdown` —
     /// the same as Steam → Exit). Note: the window's close button does NOT
     /// exit Steam; it minimizes to a system tray that is invisible under

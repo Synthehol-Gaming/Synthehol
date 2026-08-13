@@ -250,6 +250,20 @@ final class AppModel {
         }
     }
 
+    /// Triggers Steam's own uninstall flow for a game (Steam shows the
+    /// confirmation dialog and removes the files).
+    func uninstallGame(_ game: InstalledGame, in bottle: Bottle) {
+        guard let executor else { return }
+        steamRunning.insert(bottle.id)
+        activateNewWineWindows()
+        let monitor = SteamInstaller().requestUninstall(of: game, in: bottle, executor: executor)
+        Task { [weak self] in
+            await monitor.value
+            self?.steamRunning.remove(bottle.id)
+            self?.refreshGames(in: bottle)
+        }
+    }
+
     /// Wine processes aren't launched through LaunchServices, so macOS never
     /// makes their windows frontmost (under Stage Manager they land in the side
     /// strip as background apps). After a launch, watch for newly appearing

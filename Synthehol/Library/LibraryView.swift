@@ -8,6 +8,7 @@ struct LibraryView: View {
 
     @State private var settingsGame: InstalledGame?
     @State private var artworkGame: InstalledGame?
+    @State private var uninstallCandidate: InstalledGame?
 
     private var games: [InstalledGame] { model.installedGames[bottle.id] ?? [] }
 
@@ -55,7 +56,8 @@ struct LibraryView: View {
                                 game: game,
                                 bottle: bottle,
                                 onSettings: { settingsGame = game },
-                                onArtwork: { artworkGame = game }
+                                onArtwork: { artworkGame = game },
+                                onUninstall: { uninstallCandidate = game }
                             )
                         }
                     }
@@ -69,6 +71,23 @@ struct LibraryView: View {
         .sheet(item: $artworkGame) { game in
             ArtworkSheet(game: game, bottle: bottle)
         }
+        .confirmationDialog(
+            "Uninstall \"\(uninstallCandidate?.name ?? "")\"?",
+            isPresented: Binding(
+                get: { uninstallCandidate != nil },
+                set: { if !$0 { uninstallCandidate = nil } }
+            )
+        ) {
+            Button("Uninstall via Steam", role: .destructive) {
+                if let game = uninstallCandidate {
+                    model.uninstallGame(game, in: bottle)
+                }
+                uninstallCandidate = nil
+            }
+            Button("Cancel", role: .cancel) { uninstallCandidate = nil }
+        } message: {
+            Text("Steam will open and ask you to confirm. Steam removes the game's files; the tile disappears once the uninstall completes.")
+        }
     }
 }
 
@@ -79,6 +98,7 @@ struct GameTile: View {
     let bottle: Bottle
     var onSettings: () -> Void
     var onArtwork: () -> Void
+    var onUninstall: () -> Void
 
     @State private var hovering = false
 
@@ -130,6 +150,8 @@ struct GameTile: View {
             Button("Create App Launcher…") {
                 Task { await model.exportLauncher(for: game, in: bottle) }
             }
+            Divider()
+            Button("Uninstall…", role: .destructive) { onUninstall() }
         }
         .help(game.name)
     }
