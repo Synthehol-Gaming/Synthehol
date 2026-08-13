@@ -266,24 +266,43 @@ final class AppModel {
 
     /// Wine processes aren't launched through LaunchServices, so macOS never
     /// makes their windows frontmost (under Stage Manager they land in the side
-    /// strip as background apps). After a launch, watch for newly appearing
-    /// Wine GUI apps and hand each one activation, once.
+    /// strip as background apps). After triggering something that surfaces Wine
+    /// UI, watch the window server for newly appearing Wine-owned windows and
+    /// hand the owning app activation. Window-based (not process-based) so
+    /// dialogs opened by an already-running Steam count too — e.g. the
+    /// steam://uninstall confirmation.
     private func activateNewWineWindows(deadline: TimeInterval = 90) {
-        let before = Set(NSWorkspace.shared.runningApplications.map(\.processIdentifier))
+        func wineWindows() -> [(id: UInt32, pid: pid_t)] {
+            let info = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+            ) as? [[String: Any]] ?? []
+            return info.compactMap { window in
+                guard let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
+                      let owner = (window[kCGWindowOwnerName as String] as? String)?.lowercased(),
+                      owner.hasSuffix(".exe") || owner.contains("wine"),
+                      let id = window[kCGWindowNumber as String] as? Int,
+                      let pid = window[kCGWindowOwnerPID as String] as? Int
+                else { return nil }
+                return (UInt32(id), pid_t(pid))
+            }
+        }
+
+        var seen = Set(wineWindows().map(\.id))
         Task { @MainActor in
-            var activated: Set<pid_t> = []
+            var lastActivation: [pid_t: Date] = [:]
             let start = Date()
             while Date().timeIntervalSince(start) < deadline {
                 try? await Task.sleep(for: .seconds(1))
-                for app in NSWorkspace.shared.runningApplications
-                where app.activationPolicy == .regular
-                    && !before.contains(app.processIdentifier)
-                    && !activated.contains(app.processIdentifier) {
-                    let name = (app.localizedName ?? "").lowercased()
-                    guard name.hasSuffix(".exe") || name.contains("wine") else { continue }
+                for window in wineWindows() where !seen.contains(window.id) {
+                    seen.insert(window.id)
+                    // Per-app cooldown so multi-window boots don't churn focus.
+                    if let last = lastActivation[window.pid],
+                       Date().timeIntervalSince(last) < 3 { continue }
+                    guard let app = NSRunningApplication(processIdentifier: window.pid),
+                          !app.isActive else { continue }
                     NSApp.yieldActivation(to: app)
                     app.activate()
-                    activated.insert(app.processIdentifier)
+                    lastActivation[window.pid] = Date()
                 }
             }
         }
