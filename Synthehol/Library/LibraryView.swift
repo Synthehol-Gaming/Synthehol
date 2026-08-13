@@ -17,7 +17,23 @@ struct LibraryView: View {
                 ContentUnavailableView {
                     Label("Steam Not Installed", systemImage: "square.and.arrow.down")
                 } description: {
-                    Text("Install Steam in this bottle's Configuration tab to build your library.")
+                    Text("Install Steam to sign in and build your game library.")
+                } actions: {
+                    if let progress = model.steamProgress[bottle.id] {
+                        SteamProgressView(progress: progress)
+                            .frame(maxWidth: 320)
+                    } else {
+                        Button("Install Steam") {
+                            Task { await model.installSteam(in: bottle) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.runtime == nil || !bottle.prefixExists)
+                        if !bottle.prefixExists {
+                            Text("The bottle is still initializing…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             } else if games.isEmpty {
                 ContentUnavailableView {

@@ -113,6 +113,12 @@ struct BottleDetailView: View {
                 }
             }
 
+            // Until Steam is installed, setting it up is the user's next step —
+            // surface it right below the bottle header instead of mid-form.
+            if !bottle.settings.steamInstalled {
+                steamSection
+            }
+
             Section("Windows") {
                 Picker("Windows Version", selection: $draft.windowsVersion) {
                     ForEach(WindowsVersion.allCases, id: \.self) {
@@ -149,37 +155,8 @@ struct BottleDetailView: View {
                 }
             }
 
-            Section("Steam") {
-                if let progress = model.steamProgress[bottle.id] {
-                    SteamProgressView(progress: progress)
-                } else if bottle.settings.steamInstalled {
-                    HStack {
-                        Label("Steam is installed", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Spacer()
-                        Button("Quit Steam") {
-                            Task { await model.quitSteam(in: bottle) }
-                        }
-                        Button("Launch Steam") {
-                            model.launchSteam(in: bottle)
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    Text("Sign in and install games through the Steam window. Closing the window exits Steam (its “Exit Steam” interface setting is on by default), and Synthehol then cleans up the bottle's Wine processes automatically. If Steam is ever configured to minimize to the tray instead, use Quit Steam.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    HStack {
-                        Text("Steam is not installed in this bottle.")
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Install Steam") {
-                            Task { await model.installSteam(in: bottle) }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.runtime == nil || !bottle.prefixExists)
-                    }
-                }
+            if bottle.settings.steamInstalled {
+                steamSection
             }
 
             Section("Wine Tools") {
@@ -205,6 +182,47 @@ struct BottleDetailView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private var steamSection: some View {
+        Section("Steam") {
+            if let progress = model.steamProgress[bottle.id] {
+                SteamProgressView(progress: progress)
+            } else if bottle.settings.steamInstalled {
+                HStack {
+                    Label("Steam is installed", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Spacer()
+                    Button("Quit Steam") {
+                        Task { await model.quitSteam(in: bottle) }
+                    }
+                    Button("Launch Steam") {
+                        model.launchSteam(in: bottle)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                Text("Sign in and install games through the Steam window. Closing the window exits Steam (its “Exit Steam” interface setting is on by default), and Synthehol then cleans up the bottle's Wine processes automatically. If Steam is ever configured to minimize to the tray instead, use Quit Steam.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Text("Steam is not installed in this bottle. Install it to sign in and build your game library.")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Install Steam") {
+                        Task { await model.installSteam(in: bottle) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.runtime == nil || !bottle.prefixExists)
+                }
+                if !bottle.prefixExists {
+                    Text("The bottle is still initializing — Install Steam unlocks once the Windows prefix is ready.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }
 
