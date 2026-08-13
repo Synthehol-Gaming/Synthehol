@@ -61,21 +61,24 @@ struct GameTile: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            ZStack {
-                posterView
-                if hovering {
-                    Color.black.opacity(0.35)
-                    Button {
-                        model.launchGame(game, in: bottle)
-                    } label: {
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 52))
-                            .foregroundStyle(.white, .black.opacity(0.55))
+            // Color.clear owns the 2:3 layout; the poster renders in an overlay
+            // so oversized/wide artwork can never inflate the tile's bounds.
+            Color.clear
+                .aspectRatio(2 / 3, contentMode: .fit)
+                .overlay { posterView }
+                .overlay {
+                    if hovering {
+                        Color.black.opacity(0.35)
+                        Button {
+                            model.launchGame(game, in: bottle)
+                        } label: {
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 52))
+                                .foregroundStyle(.white, .black.opacity(0.55))
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
-            }
-            .aspectRatio(2 / 3, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)

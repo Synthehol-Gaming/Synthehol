@@ -34,6 +34,7 @@ struct SteamStoreTests {
         try writeManifest(appID: 620, name: "Portal 2", state: 4, in: steamapps)
         try writeManifest(appID: 400, name: "Portal", state: 4, in: steamapps)
         try writeManifest(appID: 1091500, name: "Cyberpunk 2077", state: 1028, in: steamapps) // installed + update pending
+        try writeManifest(appID: 228980, name: "Steamworks Common Redistributables", state: 4, in: steamapps) // not a game
 
         #expect(store.isInstalled(in: bottle))
         let games = try store.installedGames(in: bottle)

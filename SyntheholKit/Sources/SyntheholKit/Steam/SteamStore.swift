@@ -6,6 +6,10 @@ public struct SteamStore: GameStoreProvider {
     public static let storeID = "steam"
     public static let displayName = "Steam"
 
+    /// Support packages Steam installs alongside games that must not appear in
+    /// the library (e.g. Steamworks Common Redistributables).
+    public static let nonGameAppIDs: Set<Int> = [228980]
+
     public init() {}
 
     /// `drive_c/Program Files (x86)/Steam` — Steam's default install location.
@@ -35,7 +39,8 @@ public struct SteamStore: GameStoreProvider {
                 && manifest.pathExtension == "acf" {
                 guard let acf = try? String(contentsOf: manifest, encoding: .utf8),
                       let app = SteamApp(acf: acf),
-                      app.isFullyInstalled
+                      app.isFullyInstalled,
+                      !Self.nonGameAppIDs.contains(app.appID)
                 else { continue }
                 games.append(InstalledGame(
                     store: Self.storeID,
