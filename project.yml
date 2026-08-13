@@ -39,3 +39,6 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.colinobrien.Synthehol.launch
             CFBundleURLSchemes: [synthehol]
+        # Launcher .apps open synthehol:// URLs; without this, a URL arriving
+        # during app startup can race LaunchServices into a second instance.
+        LSMultipleInstancesProhibited: true
