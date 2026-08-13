@@ -22,6 +22,10 @@ succeeds, including specific bugs not to reintroduce).
 - Kit tests: `cd SyntheholKit && DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`
   (plain `swift test` fails: the CommandLineTools toolchain is missing the Swift Testing macro plugin)
 
+- Dev CLI harness: `cd SyntheholKit && DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build --product synthehol-dev`,
+  then `.build/debug/synthehol-dev` (runtime install/list, bottle create, wine, games).
+  It operates on the real app data dir (`~/Library/Application Support/com.colinobrien.Synthehol`).
+
 ## Conventions
 
 - Never build shell command strings for process launches — use `Process` with argv

@@ -11,7 +11,10 @@ Windows applications.
 
 - Apple Silicon only (M1+), Metal required. No Intel support.
 - One or more bottles per user; Synthehol fully automates bottle setup including Steam.
-- Steam is the install channel for games (v1). Other stores/launchers are out of scope.
+- Steam is the install channel for games (v1), but it is **provider #1, not a structural
+  assumption**: game discovery, artwork, and launch go through a `GameStoreProvider`
+  abstraction so other stores (GOG first — via GOG Galaxy or offline installers — then
+  possibly Epic/Battle.net) can be added without reworking the library UI.
 - Installed games appear as poster tiles ("movie poster" UX) and launch with one click.
 - Optional: exportable per-game launcher `.app`s (Wineskin-style shells) so games appear
   in Spotlight/Launchpad and get macOS Game Mode.
@@ -111,9 +114,19 @@ source can be swapped without an app update. Candidate builds (evaluate in Phase
 | Gcenx Wine-Crossover builds | Long-maintained generic builds; no D3DMetal bundled |
 | Build our own (fork whisky-wine) | Most control, most work; defer unless needed |
 
-Decision for v1: **adopt an existing maintained GPTK-capable build** (leading candidate:
-the frankea/Whisky fork's runtime — verify redistribution terms and exact artifact URLs
-in Phase 1), pinned by SHA-256 in the manifest. D3DMetal itself is pulled per Apple's
+Decision (Phase 1, verified 2026-08-13): **adopt the frankea/Whisky fork's runtime**,
+pinned by SHA-256 in the manifest.
+- Stable default: **Wine Libraries v3.1.1** (Wine 11.0, DXVK 1.10.3, DXMT 0.80) —
+  `https://github.com/frankea/Whisky/releases/download/v3.1.1/Libraries.tar.gz`,
+  SHA-256 `01f3a1b43b98065fe20c529c1023b61dd79a6d2ad93bba6040865f646481ccf3`
+  (published in the release notes; ~332 MB).
+- Beta channel (later): **v4.0.0-beta.2**, GPTK-capable, built from CrossOver 25
+  sources (`frankea/winecx-gptk`); fixes Steam login + video playback. No published
+  checksum — compute and pin our own when adopting. Two gotchas from its notes:
+  (a) D3DMetal requires the *user's own* GPTK download imported separately (matches
+  our no-redistribution stance); (b) CrossOver-lineage runtimes look for the profile
+  under `users/crossover` while stock prefixes use `users/<name>` — bottles need a
+  compat symlink when switching engines. D3DMetal itself is pulled per Apple's
 GPTK license terms the same way Whisky/Mythic handle it — never redistributed in our
 repo. Graphics backend defaults: **DXMT for D3D11, D3DMetal where available, DXVK as
 fallback** — per-bottle and per-game overridable.
@@ -161,6 +174,25 @@ registry defaults (retina mode, DPI) → record runtime version.
 - **Poster UI**: `LazyVGrid` of 2:3 tiles, hover play button, running badge,
   name/playtime footer; game detail sheet for settings; bottle picker only when >1
   bottle contains Steam.
+
+### Multi-store abstraction (GOG and beyond)
+
+SyntheholKit defines:
+
+```swift
+protocol GameStoreProvider {           // one per store
+    static var storeID: String         // "steam", "gog", ...
+    func isInstalled(in bottle: Bottle) -> Bool
+    func installedGames(in bottle: Bottle) throws -> [InstalledGame]
+}
+struct InstalledGame { store, storeGameID, name, posterURL, ... }
+```
+
+The library UI, artwork cache, and per-game settings key on `store:gameID`, never on
+Steam appids directly. Steam ships in v1; GOG later — likely via GOG Galaxy in-bottle
+(its `galaxy-2.0.db` SQLite holds the installed-game list) or offline installers, with
+artwork from the GOG API. Store bootstrap (Phase 3's Steam installer) gets the same
+treatment: a per-provider "install the store client silently" step.
 
 ## Phases
 
