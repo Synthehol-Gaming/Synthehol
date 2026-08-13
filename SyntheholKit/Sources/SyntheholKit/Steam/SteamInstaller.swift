@@ -69,18 +69,51 @@ public struct SteamInstaller: Sendable {
         return updated
     }
 
-    /// Launches the Steam client (fire-and-forget). The user signs in and
-    /// installs games through Steam's own UI.
+    /// Launches the Steam client. The user signs in and installs games through
+    /// Steam's own UI. When the client exits, the bottle is shut down
+    /// (`wineserver -k`) so no Wine service processes linger in the Dock —
+    /// with a restart check, because Steam's bootstrapper relaunches itself
+    /// during self-updates and must not be killed mid-update.
+    @discardableResult
     public func launch(
         in bottle: Bottle,
         executor: WineExecutor,
         arguments: [String] = SteamInstaller.defaultLaunchArguments
-    ) {
+    ) -> Task<Void, Never> {
         let steamExe = store.steamExecutable(in: bottle)
-        let stream = executor.runProgram(at: steamExe, arguments: arguments, bottle: bottle)
-        Task.detached(priority: .utility) {
-            for try await _ in stream {}
+        let stream = executor.runProgram(
+            at: steamExe, arguments: arguments, bottle: bottle, waitForExit: true
+        )
+        return Task.detached(priority: .utility) {
+            do { for try await _ in stream {} } catch {
+                Log.steam.error("Steam launch stream failed: \(error, privacy: .public)")
+                return
+            }
+            // The waited-on process exited. Give a self-restarting bootstrapper
+            // a grace window to reappear before declaring Steam closed.
+            for _ in 0..<3 {
+                try? await Task.sleep(for: .seconds(3))
+                if await executor.isProcessRunning(imageName: "steam.exe", bottle: bottle) {
+                    while await executor.isProcessRunning(imageName: "steam.exe", bottle: bottle) {
+                        try? await Task.sleep(for: .seconds(5))
+                    }
+                    break
+                }
+            }
+            Log.steam.info("Steam exited; shutting down bottle \(bottle.settings.name, privacy: .public)")
+            try? await executor.killBottle(bottle)
         }
+    }
+
+    /// Asks a running Steam client to exit cleanly (`steam.exe -shutdown` —
+    /// the same as Steam → Exit). Note: the window's close button does NOT
+    /// exit Steam; it minimizes to a system tray that is invisible under
+    /// Wine, so this is the reliable way to actually quit.
+    public func requestExit(in bottle: Bottle, executor: WineExecutor) async {
+        _ = try? await executor.runWine(
+            [store.steamExecutable(in: bottle).path(percentEncoded: false), "-shutdown"],
+            bottle: bottle
+        )
     }
 
     /// Whether a Steam client process appears to be running for this bottle

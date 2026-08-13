@@ -65,17 +65,30 @@ public struct WineExecutor: Sendable {
     }
 
     /// Launches a Windows executable: `wine64 start /unix <path> <args>`.
+    /// With `waitForExit`, the stream stays open until the program exits
+    /// (`start /wait`), enabling exit-triggered cleanup.
     public func runProgram(
         at executable: URL,
         arguments: [String] = [],
         bottle: Bottle,
+        waitForExit: Bool = false,
         extraEnvironment: [String: String] = [:]
     ) -> AsyncThrowingStream<ProcessEvent, any Error> {
-        streamWine(
-            ["start", "/unix", executable.path(percentEncoded: false)] + arguments,
+        let startArguments = ["start"]
+            + (waitForExit ? ["/wait"] : [])
+            + ["/unix", executable.path(percentEncoded: false)]
+        return streamWine(
+            startArguments + arguments,
             bottle: bottle,
             extraEnvironment: extraEnvironment
         )
+    }
+
+    /// Whether any process with this image name (e.g. `steam.exe`) is running
+    /// in the bottle, per Wine's tasklist.
+    public func isProcessRunning(imageName: String, bottle: Bottle) async -> Bool {
+        let result = try? await runWine(["tasklist"], bottle: bottle)
+        return result?.standardOutput.localizedCaseInsensitiveContains(imageName) ?? false
     }
 
     /// `wine --version`, e.g. `wine-11.0`.

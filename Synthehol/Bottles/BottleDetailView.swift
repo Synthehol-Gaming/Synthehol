@@ -84,12 +84,15 @@ struct BottleDetailView: View {
                         Label("Steam is installed", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                         Spacer()
+                        Button("Quit Steam") {
+                            Task { await model.quitSteam(in: bottle) }
+                        }
                         Button("Launch Steam") {
                             model.launchSteam(in: bottle)
                         }
                         .buttonStyle(.borderedProminent)
                     }
-                    Text("Sign in and install games through the Steam window. Installed games appear below (and in the Library in a future phase).")
+                    Text("Sign in and install games through the Steam window. Note: the window's close button only hides Steam (Windows tray behavior) — use Quit Steam, or Steam ▸ Exit, to fully stop it. Synthehol cleans up the bottle's Wine processes when Steam exits.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -127,6 +130,11 @@ struct BottleDetailView: View {
                     }
                 }
                 .disabled(model.runtime == nil || !bottle.prefixExists)
+                Button("Stop Bottle", systemImage: "stop.circle") {
+                    Task { await model.stopBottle(bottle) }
+                }
+                .help("Quits Steam if running, then shuts down all Wine processes in this bottle.")
+                .disabled(model.runtime == nil)
             }
 
             Section {

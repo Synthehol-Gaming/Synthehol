@@ -144,4 +144,27 @@ final class AppModel {
     func refreshGames(in bottle: Bottle) {
         installedGames[bottle.id] = (try? SteamStore().installedGames(in: bottle)) ?? []
     }
+
+    /// Asks Steam to exit cleanly; the launch monitor then stops the bottle.
+    func quitSteam(in bottle: Bottle) async {
+        guard let executor else { return }
+        await SteamInstaller().requestExit(in: bottle, executor: executor)
+    }
+
+    /// Stops everything in a bottle: graceful Steam exit first (if installed),
+    /// then wineserver shutdown.
+    func stopBottle(_ bottle: Bottle) async {
+        guard let executor else { return }
+        busyBottleIDs.insert(bottle.id)
+        defer { busyBottleIDs.remove(bottle.id) }
+        let steam = SteamInstaller()
+        if bottle.settings.steamInstalled {
+            await steam.requestExit(in: bottle, executor: executor)
+            for _ in 0..<5 {
+                if await !executor.isProcessRunning(imageName: "steam.exe", bottle: bottle) { break }
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+        try? await executor.killBottle(bottle)
+    }
 }

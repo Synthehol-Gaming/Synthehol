@@ -77,10 +77,10 @@ struct Main {
         case "steam" where args.count >= 3 && args[1] == "launch":
             let bottle = try Bottle.load(from: URL(filePath: args[2]))
             let executor = try await currentExecutor()
-            SteamInstaller().launch(in: bottle, executor: executor)
+            let monitor = SteamInstaller().launch(in: bottle, executor: executor)
             print("Steam launching — sign in through the Steam window.")
-            // Give the detached wine process a moment to spawn before we exit.
-            try await Task.sleep(for: .seconds(5))
+            print("(watching for exit; the bottle shuts down when Steam closes)")
+            await monitor.value
         case "games" where args.count >= 2:
             let bottle = try Bottle.load(from: URL(filePath: args[1]))
             for game in try SteamStore().installedGames(in: bottle) {
