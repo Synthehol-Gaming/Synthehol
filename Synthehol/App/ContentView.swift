@@ -37,7 +37,10 @@ struct ContentView: View {
             }
         }
         .navigationTitle("Synthehol")
-        .task { await model.refresh() }
+        .task {
+            AppAppearance.applyStored()
+            await model.refresh()
+        }
         .sheet(isPresented: $showCreateSheet) {
             CreateBottleSheet()
         }

@@ -37,5 +37,8 @@ struct SyntheholApp: App {
                 }
             }
         }
+        Settings {
+            SettingsView()
+        }
     }
 }
