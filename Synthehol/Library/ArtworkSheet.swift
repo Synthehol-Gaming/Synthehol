@@ -10,8 +10,13 @@ struct ArtworkSheet: View {
     let game: InstalledGame
     let bottle: Bottle
 
+    @AppStorage("steamGridDBAPIKey") private var apiKey = ""
     @State private var showFileImporter = false
     @State private var applying = false
+    @State private var grids: [SteamGridDBClient.Grid] = []
+    @State private var gridError: String?
+    @State private var loadingGrids = false
+    @State private var keyDraft = ""
 
     /// Official artwork variants Valve hosts for every Steam app.
     private var officialCandidates: [(label: String, url: URL)] {
@@ -64,17 +69,12 @@ struct ArtworkSheet: View {
 
             Divider()
 
+            steamGridDBSection
+
+            Divider()
+
             HStack {
                 Button("Choose Image File…") { showFileImporter = true }
-                Button("Browse SteamGridDB…") {
-                    let term = game.name.addingPercentEncoding(
-                        withAllowedCharacters: .urlQueryAllowed
-                    ) ?? game.name
-                    NSWorkspace.shared.open(
-                        URL(string: "https://www.steamgriddb.com/search/grids?term=\(term)")!
-                    )
-                }
-                .help("Opens the community artwork site in your browser — download an image there, then use Choose Image File.")
                 Spacer()
                 Button("Reset to Default") {
                     Task {
@@ -111,6 +111,111 @@ struct ArtworkSheet: View {
                 await model.setCustomPoster(data, for: game)
                 dismiss()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var steamGridDBSection: some View {
+        if apiKey.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Community artwork (SteamGridDB)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Browse thousands of community posters right here. It needs a free personal API key — one-time setup.")
+                    .font(.callout)
+                HStack {
+                    SecureField("Paste your SteamGridDB API key", text: $keyDraft)
+                        .frame(maxWidth: 280)
+                    Button("Save") {
+                        apiKey = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        Task { await loadGrids() }
+                    }
+                    .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Get a Key…") {
+                        NSWorkspace.shared.open(
+                            URL(string: "https://www.steamgriddb.com/profile/preferences/api")!
+                        )
+                    }
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Community artwork (SteamGridDB) — click to use")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if loadingGrids { ProgressView().controlSize(.small) }
+                    Button("Change Key") {
+                        keyDraft = ""
+                        apiKey = ""
+                        grids = []
+                    }
+                    .controlSize(.small)
+                }
+                if let gridError {
+                    Text(gridError).font(.callout).foregroundStyle(.orange)
+                }
+                if !grids.isEmpty {
+                    ScrollView {
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 92, maximum: 110), spacing: 10)],
+                            spacing: 10
+                        ) {
+                            ForEach(grids) { grid in
+                                Button {
+                                    apply(from: grid.url)
+                                } label: {
+                                    AsyncImage(url: grid.thumb) { phase in
+                                        switch phase {
+                                        case .success(let image):
+                                            image.resizable().aspectRatio(contentMode: .fill)
+                                        case .failure:
+                                            Image(systemName: "photo.badge.exclamationmark")
+                                                .foregroundStyle(.tertiary)
+                                        default:
+                                            ProgressView().controlSize(.small)
+                                        }
+                                    }
+                                    .frame(width: 92, height: 138)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .frame(height: 300)
+                } else if !loadingGrids && gridError == nil {
+                    Text("No community posters found for this game.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .task(id: game.id) { await loadGrids() }
+        }
+    }
+
+    private func loadGrids() async {
+        guard !apiKey.isEmpty else { return }
+        loadingGrids = true
+        gridError = nil
+        defer { loadingGrids = false }
+        let client = SteamGridDBClient(apiKey: apiKey)
+        do {
+            var results: [SteamGridDBClient.Grid] = []
+            if game.store == SteamStore.storeID {
+                results = (try? await client.grids(forSteamAppID: game.storeGameID)) ?? []
+            }
+            if results.isEmpty,
+               let match = try await client.search(game.name).first {
+                results = try await client.grids(forGameID: match.id)
+            }
+            grids = results
+        } catch SteamGridDBClient.ClientError.unauthorized {
+            gridError = "SteamGridDB rejected the API key. Check it and try again."
+            apiKey = ""
+        } catch {
+            gridError = "Couldn't reach SteamGridDB: \(error.localizedDescription)"
         }
     }
 
