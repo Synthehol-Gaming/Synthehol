@@ -22,7 +22,8 @@ final class AppModel {
     var lastError: String?
 
     private let artworkCache = ArtworkCache()
-    private var posterImages: [String: NSImage] = [:]
+    /// Observable so tiles update the moment artwork changes.
+    var posterImages: [String: NSImage] = [:]
     private var watchers: [Bottle.ID: DirectoryWatcher] = [:]
 
     var selectedBottle: Bottle? {
@@ -76,6 +77,29 @@ final class AppModel {
             return
         }
         launchGame(game, in: bottle)
+    }
+
+    // MARK: Artwork management
+
+    /// Applies user-chosen artwork (from a file or a downloaded candidate).
+    func setCustomPoster(_ data: Data, for game: InstalledGame) async {
+        guard let image = NSImage(data: data) else {
+            lastError = "That file doesn't look like an image."
+            return
+        }
+        do {
+            try await artworkCache.setCustomPoster(data, forGameID: game.id)
+            posterImages[game.id] = image
+        } catch {
+            lastError = "Couldn't save artwork: \(error.localizedDescription)"
+        }
+    }
+
+    /// Clears custom/cached artwork and re-fetches the default poster.
+    func resetPoster(for game: InstalledGame, in bottle: Bottle) async {
+        await artworkCache.resetPoster(forGameID: game.id)
+        posterImages.removeValue(forKey: game.id)
+        _ = await poster(for: game, in: bottle)
     }
 
     /// Exports a `.app` launcher for a game with its poster as the icon.

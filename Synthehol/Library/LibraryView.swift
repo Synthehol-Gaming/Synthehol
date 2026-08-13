@@ -7,6 +7,7 @@ struct LibraryView: View {
     let bottle: Bottle
 
     @State private var settingsGame: InstalledGame?
+    @State private var artworkGame: InstalledGame?
 
     private var games: [InstalledGame] { model.installedGames[bottle.id] ?? [] }
 
@@ -34,9 +35,12 @@ struct LibraryView: View {
                         spacing: 24
                     ) {
                         ForEach(games) { game in
-                            GameTile(game: game, bottle: bottle) {
-                                settingsGame = game
-                            }
+                            GameTile(
+                                game: game,
+                                bottle: bottle,
+                                onSettings: { settingsGame = game },
+                                onArtwork: { artworkGame = game }
+                            )
                         }
                     }
                     .padding(20)
@@ -45,6 +49,9 @@ struct LibraryView: View {
         }
         .sheet(item: $settingsGame) { game in
             GameSettingsSheet(game: game, bottle: bottle)
+        }
+        .sheet(item: $artworkGame) { game in
+            ArtworkSheet(game: game, bottle: bottle)
         }
     }
 }
@@ -55,9 +62,11 @@ struct GameTile: View {
     let game: InstalledGame
     let bottle: Bottle
     var onSettings: () -> Void
+    var onArtwork: () -> Void
 
-    @State private var poster: NSImage?
     @State private var hovering = false
+
+    private var poster: NSImage? { model.posterImages[game.id] }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -95,11 +104,12 @@ struct GameTile: View {
         }
         .onHover { hovering = $0 }
         .task(id: game.id) {
-            poster = await model.poster(for: game, in: bottle)
+            _ = await model.poster(for: game, in: bottle)
         }
         .contextMenu {
             Button("Play") { model.launchGame(game, in: bottle) }
             Button("Game Settings…") { onSettings() }
+            Button("Change Artwork…") { onArtwork() }
             Divider()
             Button("Create App Launcher…") {
                 Task { await model.exportLauncher(for: game, in: bottle) }

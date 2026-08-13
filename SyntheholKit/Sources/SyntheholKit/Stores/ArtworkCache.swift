@@ -18,6 +18,19 @@ public actor ArtworkCache {
         self.urlSession = urlSession
     }
 
+    /// Replaces the cached poster with user-chosen artwork. The cache file is
+    /// the single source of truth, so the override survives restarts and is
+    /// what launcher-icon export and tiles read.
+    public func setCustomPoster(_ data: Data, forGameID id: String) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try data.write(to: cacheFile(forGameID: id), options: .atomic)
+    }
+
+    /// Removes cached/custom artwork; the next `poster` call re-fetches defaults.
+    public func resetPoster(forGameID id: String) {
+        try? FileManager.default.removeItem(at: cacheFile(forGameID: id))
+    }
+
     func cacheFile(forGameID id: String) -> URL {
         let safeID = id.replacingOccurrences(of: ":", with: "-")
             .replacingOccurrences(of: "/", with: "_")

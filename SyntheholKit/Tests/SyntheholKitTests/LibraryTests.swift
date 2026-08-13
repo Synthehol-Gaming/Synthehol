@@ -75,6 +75,24 @@ struct ArtworkCacheTests {
         #expect(cached == Data("local-art".utf8))
     }
 
+    @Test func customPosterOverridesAndResetRefetches() async throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let cache = ArtworkCache(directory: temp)
+
+        try await cache.setCustomPoster(Data("my-art".utf8), forGameID: portal2.id)
+        let custom = await cache.poster(for: portal2, remoteCandidates: [])
+        #expect(custom == Data("my-art".utf8))
+
+        await cache.resetPoster(forGameID: portal2.id)
+        let localArt = temp.appending(path: "fallback.jpg")
+        try Data("default-art".utf8).write(to: localArt)
+        let refetched = await cache.poster(
+            for: portal2, remoteCandidates: [], localFallbacks: [localArt]
+        )
+        #expect(refetched == Data("default-art".utf8))
+    }
+
     @Test func missingEverywhereReturnsNil() async throws {
         let temp = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: temp) }
