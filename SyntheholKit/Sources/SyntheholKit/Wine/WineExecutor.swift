@@ -188,5 +188,13 @@ public struct WineExecutor: Sendable {
             type: .dword,
             bottle: bottle
         )
+        // Fullscreen display capture for correct cursor confinement in games.
+        try await addRegistryKey(
+            #"HKCU\Software\Wine\Mac Driver"#,
+            name: "CaptureDisplaysForFullscreen",
+            data: bottle.settings.captureDisplaysForFullscreen ? "y" : "n",
+            type: .string,
+            bottle: bottle
+        )
     }
 }

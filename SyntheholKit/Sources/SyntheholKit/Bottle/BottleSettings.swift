@@ -48,6 +48,12 @@ public struct BottleSettings: Codable, Equatable, Sendable {
     public var graphicsBackend: GraphicsBackend
     public var metalHUD: Bool
     public var dxvkAsync: Bool
+    /// Fullscreen games capture the display (Mac driver
+    /// `CaptureDisplaysForFullscreen`): proper cursor confinement/hiding and
+    /// lower compositing overhead, at the cost of slightly clunkier Cmd+Tab
+    /// while a captured fullscreen game runs. Wine defaults this off; games
+    /// want it on.
+    public var captureDisplaysForFullscreen: Bool
     public var retinaMode: Bool
     /// Explicit Windows DPI (LogPixels). `nil` = automatic: 192 when Retina Mode
     /// is on (2× scaling so UI is crisp *and* correctly sized on Retina
@@ -68,6 +74,7 @@ public struct BottleSettings: Codable, Equatable, Sendable {
         self.graphicsBackend = .dxmt
         self.metalHUD = false
         self.dxvkAsync = true
+        self.captureDisplaysForFullscreen = true
         self.retinaMode = true
         self.dpi = nil
         self.steamInstalled = false
@@ -85,6 +92,9 @@ public struct BottleSettings: Codable, Equatable, Sendable {
         graphicsBackend = try c.decodeIfPresent(GraphicsBackend.self, forKey: .graphicsBackend) ?? .dxmt
         metalHUD = try c.decodeIfPresent(Bool.self, forKey: .metalHUD) ?? false
         dxvkAsync = try c.decodeIfPresent(Bool.self, forKey: .dxvkAsync) ?? true
+        captureDisplaysForFullscreen = try c.decodeIfPresent(
+            Bool.self, forKey: .captureDisplaysForFullscreen
+        ) ?? true
         retinaMode = try c.decodeIfPresent(Bool.self, forKey: .retinaMode) ?? true
         dpi = try c.decodeIfPresent(Int.self, forKey: .dpi)
         steamInstalled = try c.decodeIfPresent(Bool.self, forKey: .steamInstalled) ?? false

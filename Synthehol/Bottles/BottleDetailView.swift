@@ -137,6 +137,10 @@ struct BottleDetailView: View {
                     .foregroundStyle(.secondary)
                 Toggle("Metal HUD", isOn: $draft.metalHUD)
                 Toggle("Retina Mode", isOn: $draft.retinaMode)
+                Toggle("Capture Displays in Fullscreen", isOn: $draft.captureDisplaysForFullscreen)
+                Text("Gives fullscreen games exclusive display access for proper mouse capture and cursor hiding. Turn off if you switch apps constantly while playing.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Picker("Scaling (DPI)", selection: $draft.dpi) {
                     Text("Automatic (\(draft.retinaMode ? 192 : 96) dpi)").tag(Int?.none)
                     ForEach([96, 120, 144, 168, 192, 216, 240], id: \.self) { value in

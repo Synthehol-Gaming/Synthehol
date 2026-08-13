@@ -34,6 +34,9 @@ public enum ProcessRunner {
             let process = Process()
             process.executableURL = executable
             process.arguments = arguments
+            // Games are interactive: without this, macOS may schedule the wine
+            // processes as background work and input latency suffers.
+            process.qualityOfService = .userInitiated
             if let environment { process.environment = environment }
             if let currentDirectory { process.currentDirectoryURL = currentDirectory }
 
