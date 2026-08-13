@@ -45,13 +45,8 @@ struct Main {
         case "bottle" where args.count >= 3 && args[1] == "create":
             try await createBottle(named: args[2])
         case "bottle" where args.count >= 2 && args[1] == "list":
-            let bottles = (try? FileManager.default.contentsOfDirectory(
-                at: SyntheholPaths.bottles, includingPropertiesForKeys: nil
-            )) ?? []
-            for url in bottles {
-                if let bottle = try? Bottle.load(from: url) {
-                    print("\(bottle.settings.name)\t\(bottle.url.path(percentEncoded: false))")
-                }
+            for bottle in await BottleStore().bottles() {
+                print("\(bottle.settings.name)\t\(bottle.url.path(percentEncoded: false))")
             }
         case "winecfg" where args.count >= 2:
             let bottle = try Bottle.load(from: URL(filePath: args[1]))
@@ -109,7 +104,7 @@ struct Main {
             exit(1)
         }
         let executor = try await currentExecutor()
-        let bottle = try Bottle.create(name: name)
+        let bottle = try await BottleStore().create(name: name)
         print("Created \(bottle.url.path(percentEncoded: false)); initializing prefix…")
         try await executor.initializePrefix(for: bottle)
         try await executor.applyRegistrySettings(for: bottle)

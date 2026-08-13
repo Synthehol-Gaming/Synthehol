@@ -2,6 +2,22 @@ import Foundation
 
 public enum WindowsVersion: String, Codable, CaseIterable, Sendable {
     case win10, win11
+
+    public var displayName: String {
+        switch self {
+        case .win10: "Windows 10"
+        case .win11: "Windows 11"
+        }
+    }
+
+    /// Build number written to the registry alongside `winecfg -v` so version
+    /// checks that read CurrentBuild(Number) see a consistent Windows.
+    public var buildNumber: String {
+        switch self {
+        case .win10: "19045"
+        case .win11: "22621"
+        }
+    }
 }
 
 public enum EnhancedSync: String, Codable, CaseIterable, Sendable {

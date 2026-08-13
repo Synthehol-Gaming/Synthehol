@@ -116,6 +116,47 @@ public struct WineExecutor: Sendable {
         )
     }
 
+    /// Changes the prefix's Windows version and keeps the registry build number
+    /// consistent with it.
+    public func changeWindowsVersion(_ version: WindowsVersion, bottle: Bottle) async throws {
+        try await runWine(["winecfg", "-v", version.rawValue], bottle: bottle)
+        let key = #"HKLM\Software\Microsoft\Windows NT\CurrentVersion"#
+        try await addRegistryKey(
+            key, name: "CurrentBuild", data: version.buildNumber, type: .string, bottle: bottle
+        )
+        try await addRegistryKey(
+            key, name: "CurrentBuildNumber", data: version.buildNumber, type: .string, bottle: bottle
+        )
+    }
+
+    /// Wine's built-in GUI tools, used from the bottle configuration UI.
+    public enum WineTool: String, Sendable, CaseIterable {
+        case winecfg
+        case controlPanel = "control"
+        case regedit
+        case taskManager = "taskmgr"
+        case explorer
+
+        public var displayName: String {
+            switch self {
+            case .winecfg: "Wine Configuration"
+            case .controlPanel: "Control Panel"
+            case .regedit: "Registry Editor"
+            case .taskManager: "Task Manager"
+            case .explorer: "File Explorer"
+            }
+        }
+    }
+
+    /// Launches a Wine GUI tool without waiting for it to exit. Output is
+    /// drained in a detached task so the pipe never blocks the tool.
+    public func launchTool(_ tool: WineTool, bottle: Bottle) {
+        let stream = streamWine([tool.rawValue], bottle: bottle)
+        Task.detached(priority: .utility) {
+            for try await _ in stream {}
+        }
+    }
+
     /// Applies settings that live in the registry rather than the environment
     /// (retina mode, DPI). Call after prefix initialization or settings changes.
     public func applyRegistrySettings(for bottle: Bottle) async throws {
