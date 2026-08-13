@@ -1,0 +1,36 @@
+name: Synthehol
+options:
+  bundleIdPrefix: com.colinobrien
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+
+packages:
+  SyntheholKit:
+    path: SyntheholKit
+
+targets:
+  Synthehol:
+    type: application
+    platform: macOS
+    sources:
+      - Synthehol
+    dependencies:
+      - package: SyntheholKit
+    settings:
+      base:
+        ARCHS: arm64
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        PRODUCT_BUNDLE_IDENTIFIER: com.colinobrien.Synthehol
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: NO
+        CODE_SIGN_ENTITLEMENTS: Synthehol/Synthehol.entitlements
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.games
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: A Windows application is trying to access the microphone.
+        INFOPLIST_KEY_NSCameraUsageDescription: A Windows application is trying to access the camera.
