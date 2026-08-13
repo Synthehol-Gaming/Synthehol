@@ -15,7 +15,10 @@ struct SyntheholApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup {
+        // Single-window app: a Window scene (not WindowGroup) so incoming
+        // synthehol:// URLs land in the existing window instead of spawning
+        // a new one per launcher invocation.
+        Window("Synthehol", id: "main") {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 900, minHeight: 600)
