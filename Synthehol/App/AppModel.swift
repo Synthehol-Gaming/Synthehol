@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SyntheholKit
@@ -17,7 +18,12 @@ final class AppModel {
     var busyBottleIDs: Set<Bottle.ID> = []
     var steamProgress: [Bottle.ID: SteamInstaller.Progress] = [:]
     var installedGames: [Bottle.ID: [InstalledGame]] = [:]
+    var steamRunning: Set<Bottle.ID> = []
     var lastError: String?
+
+    private let artworkCache = ArtworkCache()
+    private var posterImages: [String: NSImage] = [:]
+    private var watchers: [Bottle.ID: DirectoryWatcher] = [:]
 
     var selectedBottle: Bottle? {
         bottles.first { $0.id == selectedBottleID }
@@ -137,12 +143,56 @@ final class AppModel {
 
     func launchSteam(in bottle: Bottle) {
         guard let executor else { return }
-        SteamInstaller().launch(in: bottle, executor: executor)
+        steamRunning.insert(bottle.id)
+        let monitor = SteamInstaller().launch(in: bottle, executor: executor)
+        Task { [weak self] in
+            await monitor.value
+            self?.steamRunning.remove(bottle.id)
+            self?.refreshGames(in: bottle)
+        }
     }
 
-    /// Refreshes the installed-games preview for a bottle (full library UI is Phase 4).
+    /// Launches a game via Steam (`-applaunch`); Steam boots first if needed.
+    func launchGame(_ game: InstalledGame, in bottle: Bottle) {
+        guard let executor else { return }
+        steamRunning.insert(bottle.id)
+        let monitor = SteamInstaller().launchGame(game, in: bottle, executor: executor)
+        Task { [weak self] in
+            await monitor.value
+            self?.steamRunning.remove(bottle.id)
+            self?.refreshGames(in: bottle)
+        }
+    }
+
+    /// Refreshes the installed-games list and keeps the steamapps watcher alive.
     func refreshGames(in bottle: Bottle) {
         installedGames[bottle.id] = (try? SteamStore().installedGames(in: bottle)) ?? []
+        startWatchingIfNeeded(bottle)
+    }
+
+    /// Poster image for a game, from the artwork cache (memory → disk → CDN →
+    /// Steam's own librarycache in the bottle).
+    func poster(for game: InstalledGame, in bottle: Bottle) async -> NSImage? {
+        if let image = posterImages[game.id] { return image }
+        let store = SteamStore()
+        let data = await artworkCache.poster(
+            for: game,
+            remoteCandidates: store.remoteArtworkCandidates(for: game),
+            localFallbacks: store.localArtworkFallbacks(for: game, in: bottle)
+        )
+        guard let data, let image = NSImage(data: data) else { return nil }
+        posterImages[game.id] = image
+        return image
+    }
+
+    private func startWatchingIfNeeded(_ bottle: Bottle) {
+        guard watchers[bottle.id] == nil, bottle.settings.steamInstalled else { return }
+        let steamapps = SteamStore().steamDirectory(in: bottle).appending(path: "steamapps")
+        let bottleURL = bottle.url
+        watchers[bottle.id] = DirectoryWatcher(url: steamapps) { [weak self] in
+            guard let self, let fresh = try? Bottle.load(from: bottleURL) else { return }
+            self.refreshGames(in: fresh)
+        }
     }
 
     /// Asks Steam to exit cleanly; the launch monitor then stops the bottle.

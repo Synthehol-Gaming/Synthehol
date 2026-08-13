@@ -5,6 +5,9 @@ struct BottleDetailView: View {
     @Environment(AppModel.self) private var model
     let bottle: Bottle
 
+    enum Tab: Hashable { case library, configuration }
+
+    @State private var tab: Tab = .library
     @State private var draft: BottleSettings
     @State private var showDeleteDialog = false
     @State private var showRenameSheet = false
@@ -17,6 +20,70 @@ struct BottleDetailView: View {
     private var isBusy: Bool { model.busyBottleIDs.contains(bottle.id) }
 
     var body: some View {
+        Group {
+            switch tab {
+            case .library:
+                LibraryView(bottle: bottle)
+            case .configuration:
+                configurationForm
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("View", selection: $tab) {
+                    Text("Library").tag(Tab.library)
+                    Text("Configuration").tag(Tab.configuration)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            if bottle.settings.steamInstalled {
+                ToolbarItem(placement: .primaryAction) {
+                    if model.steamRunning.contains(bottle.id) {
+                        Button("Quit Steam", systemImage: "stop.fill") {
+                            Task { await model.quitSteam(in: bottle) }
+                        }
+                        .help("Steam is running in this bottle. Quits it and cleans up Wine processes.")
+                    } else {
+                        Button("Launch Steam", systemImage: "play.fill") {
+                            model.launchSteam(in: bottle)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(bottle.settings.name)
+        .task(id: bottle.id) {
+            model.refreshGames(in: bottle)
+            if !bottle.settings.steamInstalled { tab = .configuration }
+        }
+        .onChange(of: draft) {
+            let settings = draft
+            Task { await model.applySettings(settings, to: bottle) }
+        }
+        .onChange(of: bottle.settings) {
+            draft = bottle.settings
+        }
+        .confirmationDialog(
+            "Delete \"\(bottle.settings.name)\"?",
+            isPresented: $showDeleteDialog
+        ) {
+            Button("Move Files to Trash & Forget", role: .destructive) {
+                Task { await model.deleteBottle(bottle, deleteFiles: true) }
+            }
+            Button("Forget Only (Keep Files)") {
+                Task { await model.deleteBottle(bottle, deleteFiles: false) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Deleting removes the Windows prefix and everything installed in it.")
+        }
+        .sheet(isPresented: $showRenameSheet) {
+            RenameBottleSheet(bottle: bottle)
+        }
+    }
+
+    private var configurationForm: some View {
         Form {
             Section {
                 LabeledContent("Name") {
@@ -95,18 +162,6 @@ struct BottleDetailView: View {
                     Text("Sign in and install games through the Steam window. Closing the window exits Steam (its “Exit Steam” interface setting is on by default), and Synthehol then cleans up the bottle's Wine processes automatically. If Steam is ever configured to minimize to the tray instead, use Quit Steam.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-
-                    let games = model.installedGames[bottle.id] ?? []
-                    if games.isEmpty {
-                        Text("No games installed yet.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(games) { game in
-                            LabeledContent(game.name) {
-                                Text(game.storeGameID).monospaced().foregroundStyle(.tertiary)
-                            }
-                        }
-                    }
                 } else {
                     HStack {
                         Text("Steam is not installed in this bottle.")
@@ -144,34 +199,6 @@ struct BottleDetailView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle(bottle.settings.name)
-        .task(id: bottle.id) {
-            model.refreshGames(in: bottle)
-        }
-        .onChange(of: draft) {
-            let settings = draft
-            Task { await model.applySettings(settings, to: bottle) }
-        }
-        .onChange(of: bottle.settings) {
-            draft = bottle.settings
-        }
-        .confirmationDialog(
-            "Delete \"\(bottle.settings.name)\"?",
-            isPresented: $showDeleteDialog
-        ) {
-            Button("Move Files to Trash & Forget", role: .destructive) {
-                Task { await model.deleteBottle(bottle, deleteFiles: true) }
-            }
-            Button("Forget Only (Keep Files)") {
-                Task { await model.deleteBottle(bottle, deleteFiles: false) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Deleting removes the Windows prefix and everything installed in it.")
-        }
-        .sheet(isPresented: $showRenameSheet) {
-            RenameBottleSheet(bottle: bottle)
-        }
     }
 }
 

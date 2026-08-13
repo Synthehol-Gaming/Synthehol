@@ -77,6 +77,26 @@ public struct SteamStore: GameStoreProvider {
         }
     }
 
+    /// Remote poster candidates, best first (CDN 2×, CDN 1×, wide header).
+    public func remoteArtworkCandidates(for game: InstalledGame) -> [URL] {
+        let base = "https://steamcdn-a.akamaihd.net/steam/apps/\(game.storeGameID)"
+        return [
+            URL(string: "\(base)/library_600x900_2x.jpg")!,
+            URL(string: "\(base)/library_600x900.jpg")!,
+            URL(string: "\(base)/header.jpg")!
+        ]
+    }
+
+    /// Artwork Steam itself has cached inside the bottle (works offline).
+    public func localArtworkFallbacks(for game: InstalledGame, in bottle: Bottle) -> [URL] {
+        let cache = steamDirectory(in: bottle)
+            .appending(path: "appcache/librarycache/\(game.storeGameID)")
+        return [
+            cache.appending(path: "library_600x900.jpg"),
+            cache.appending(path: "header.jpg")
+        ]
+    }
+
     /// Maps `C:\...` to `<bottle>/drive_c/...`. Non-C drives are not mapped (yet).
     static func mapWindowsPath(_ windowsPath: String, driveC: URL) -> URL? {
         let normalized = windowsPath.replacingOccurrences(of: "\\\\", with: "\\")

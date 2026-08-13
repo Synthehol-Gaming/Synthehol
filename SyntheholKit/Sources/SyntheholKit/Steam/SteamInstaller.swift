@@ -78,11 +78,13 @@ public struct SteamInstaller: Sendable {
     public func launch(
         in bottle: Bottle,
         executor: WineExecutor,
-        arguments: [String] = SteamInstaller.defaultLaunchArguments
+        arguments: [String] = SteamInstaller.defaultLaunchArguments,
+        extraEnvironment: [String: String] = [:]
     ) -> Task<Void, Never> {
         let steamExe = store.steamExecutable(in: bottle)
         let stream = executor.runProgram(
-            at: steamExe, arguments: arguments, bottle: bottle, waitForExit: true
+            at: steamExe, arguments: arguments, bottle: bottle, waitForExit: true,
+            extraEnvironment: extraEnvironment
         )
         return Task.detached(priority: .utility) {
             do { for try await _ in stream {} } catch {
@@ -103,6 +105,25 @@ public struct SteamInstaller: Sendable {
             Log.steam.info("Steam exited; shutting down bottle \(bottle.settings.name, privacy: .public)")
             try? await executor.killBottle(bottle)
         }
+    }
+
+    /// Launches an installed game via Steam (`steam.exe -applaunch <appid>`),
+    /// so Steam handles DRM, cloud saves, and the overlay. Works whether or not
+    /// the client is already running. Per-game settings supply extra launch
+    /// arguments and environment variables.
+    @discardableResult
+    public func launchGame(
+        _ game: InstalledGame,
+        in bottle: Bottle,
+        executor: WineExecutor
+    ) -> Task<Void, Never> {
+        let settings = GameSettings.load(for: game, in: bottle)
+        return launch(
+            in: bottle,
+            executor: executor,
+            arguments: ["-applaunch", game.storeGameID] + settings.launchArgumentList,
+            extraEnvironment: settings.environment
+        )
     }
 
     /// Asks a running Steam client to exit cleanly (`steam.exe -shutdown` —
