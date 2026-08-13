@@ -76,6 +76,48 @@ struct BottleDetailView: View {
                 }
             }
 
+            Section("Steam") {
+                if let progress = model.steamProgress[bottle.id] {
+                    SteamProgressView(progress: progress)
+                } else if bottle.settings.steamInstalled {
+                    HStack {
+                        Label("Steam is installed", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Spacer()
+                        Button("Launch Steam") {
+                            model.launchSteam(in: bottle)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    Text("Sign in and install games through the Steam window. Installed games appear below (and in the Library in a future phase).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    let games = model.installedGames[bottle.id] ?? []
+                    if games.isEmpty {
+                        Text("No games installed yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(games) { game in
+                            LabeledContent(game.name) {
+                                Text(game.storeGameID).monospaced().foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                } else {
+                    HStack {
+                        Text("Steam is not installed in this bottle.")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Install Steam") {
+                            Task { await model.installSteam(in: bottle) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.runtime == nil || !bottle.prefixExists)
+                    }
+                }
+            }
+
             Section("Wine Tools") {
                 HStack {
                     ForEach(WineExecutor.WineTool.allCases, id: \.self) { tool in
@@ -95,6 +137,9 @@ struct BottleDetailView: View {
         }
         .formStyle(.grouped)
         .navigationTitle(bottle.settings.name)
+        .task(id: bottle.id) {
+            model.refreshGames(in: bottle)
+        }
         .onChange(of: draft) {
             let settings = draft
             Task { await model.applySettings(settings, to: bottle) }
@@ -118,6 +163,28 @@ struct BottleDetailView: View {
         }
         .sheet(isPresented: $showRenameSheet) {
             RenameBottleSheet(bottle: bottle)
+        }
+    }
+}
+
+struct SteamProgressView: View {
+    let progress: SteamInstaller.Progress
+
+    var body: some View {
+        switch progress {
+        case .downloading(let done, let total):
+            if let total {
+                ProgressView(
+                    "Downloading Steam installer…",
+                    value: Double(done), total: Double(total)
+                )
+            } else {
+                ProgressView("Downloading Steam installer… \(done / 1024) KB")
+            }
+        case .installing:
+            ProgressView("Installing Steam (silent)…")
+        case .verifying:
+            ProgressView("Verifying…")
         }
     }
 }

@@ -17,6 +17,8 @@ struct Main {
       synthehol-dev winecfg <bottle-path>  Open winecfg for a bottle
       synthehol-dev wine <bottle-path> <args...>   Run wine64 with arguments
       synthehol-dev games <bottle-path>    List installed Steam games in a bottle
+      synthehol-dev steam install <bottle-path>   Install the Steam client into a bottle
+      synthehol-dev steam launch <bottle-path>    Launch the Steam client in a bottle
     """
 
     static func main() async {
@@ -58,6 +60,27 @@ struct Main {
             let result = try await executor.runWine(Array(args.dropFirst(2)), bottle: bottle)
             print(result.standardOutput)
             if !result.standardError.isEmpty { fputs(result.standardError, stderr) }
+        case "steam" where args.count >= 3 && args[1] == "install":
+            let bottle = try Bottle.load(from: URL(filePath: args[2]))
+            let executor = try await currentExecutor()
+            print("Installing Steam into \"\(bottle.settings.name)\"…")
+            let updated = try await SteamInstaller().install(in: bottle, executor: executor) { progress in
+                switch progress {
+                case .downloading(let done, _):
+                    print("\rdownloading installer: \(done / 1024) KB", terminator: "")
+                    fflush(stdout)
+                case .installing: print("\nrunning silent install…")
+                case .verifying: print("verifying…")
+                }
+            }
+            print("Steam installed at \(SteamStore().steamExecutable(in: updated).path(percentEncoded: false))")
+        case "steam" where args.count >= 3 && args[1] == "launch":
+            let bottle = try Bottle.load(from: URL(filePath: args[2]))
+            let executor = try await currentExecutor()
+            SteamInstaller().launch(in: bottle, executor: executor)
+            print("Steam launching — sign in through the Steam window.")
+            // Give the detached wine process a moment to spawn before we exit.
+            try await Task.sleep(for: .seconds(5))
         case "games" where args.count >= 2:
             let bottle = try Bottle.load(from: URL(filePath: args[1]))
             for game in try SteamStore().installedGames(in: bottle) {

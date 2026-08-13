@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// Progress through a runtime install.
@@ -89,9 +88,11 @@ public actor RuntimeStore {
 
         // Download to the staging dir, hashing as bytes arrive.
         let archive = staging.appending(path: "runtime.tar.gz")
-        let actualHash = try await download(
-            manifest.url, to: archive, urlSession: urlSession, onProgress: onProgress
-        )
+        let actualHash = try await FileDownloader.download(
+            manifest.url, to: archive, urlSession: urlSession
+        ) { bytesDownloaded, totalBytes in
+            onProgress?(.downloading(bytesDownloaded: bytesDownloaded, totalBytes: totalBytes))
+        }
 
         onProgress?(.verifying)
         let expected = manifest.sha256.lowercased()
@@ -152,49 +153,4 @@ public actor RuntimeStore {
         }
     }
 
-    // MARK: Download
-
-    /// Streams `url` to `destination`, returning the SHA-256 of the bytes written.
-    private func download(
-        _ url: URL,
-        to destination: URL,
-        urlSession: URLSession,
-        onProgress: (@Sendable (RuntimeInstallProgress) -> Void)?
-    ) async throws -> String {
-        let (bytes, response) = try await urlSession.bytes(from: url)
-        let totalBytes: Int64? = response.expectedContentLength > 0
-            ? response.expectedContentLength : nil
-
-        FileManager.default.createFile(atPath: destination.path(percentEncoded: false), contents: nil)
-        let handle = try FileHandle(forWritingTo: destination)
-        defer { try? handle.close() }
-
-        var hasher = SHA256()
-        var buffer = Data(capacity: 1 << 16)
-        var written: Int64 = 0
-        var lastReport: Int64 = 0
-
-        for try await byte in bytes {
-            buffer.append(byte)
-            if buffer.count == 1 << 16 {
-                try handle.write(contentsOf: buffer)
-                hasher.update(data: buffer)
-                written += Int64(buffer.count)
-                buffer.removeAll(keepingCapacity: true)
-                // Report roughly every 4 MB.
-                if written - lastReport >= 1 << 22 {
-                    lastReport = written
-                    onProgress?(.downloading(bytesDownloaded: written, totalBytes: totalBytes))
-                }
-            }
-        }
-        if !buffer.isEmpty {
-            try handle.write(contentsOf: buffer)
-            hasher.update(data: buffer)
-            written += Int64(buffer.count)
-        }
-        onProgress?(.downloading(bytesDownloaded: written, totalBytes: totalBytes))
-
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
 }

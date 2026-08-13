@@ -15,6 +15,8 @@ final class AppModel {
     var runtime: WineRuntime?
     var runtimeProgress: RuntimeInstallProgress?
     var busyBottleIDs: Set<Bottle.ID> = []
+    var steamProgress: [Bottle.ID: SteamInstaller.Progress] = [:]
+    var installedGames: [Bottle.ID: [InstalledGame]] = [:]
     var lastError: String?
 
     var selectedBottle: Bottle? {
@@ -112,5 +114,34 @@ final class AppModel {
     func launchTool(_ tool: WineExecutor.WineTool, in bottle: Bottle) {
         guard let executor else { return }
         executor.launchTool(tool, bottle: bottle)
+    }
+
+    // MARK: Steam
+
+    func installSteam(in bottle: Bottle) async {
+        guard let executor else {
+            lastError = "Install the Wine runtime first."
+            return
+        }
+        steamProgress[bottle.id] = .downloading(bytesDownloaded: 0, totalBytes: nil)
+        defer { steamProgress[bottle.id] = nil }
+        do {
+            _ = try await SteamInstaller().install(in: bottle, executor: executor) { progress in
+                Task { @MainActor [weak self] in self?.steamProgress[bottle.id] = progress }
+            }
+            await refresh()
+        } catch {
+            lastError = "Steam install failed: \(error.localizedDescription)"
+        }
+    }
+
+    func launchSteam(in bottle: Bottle) {
+        guard let executor else { return }
+        SteamInstaller().launch(in: bottle, executor: executor)
+    }
+
+    /// Refreshes the installed-games preview for a bottle (full library UI is Phase 4).
+    func refreshGames(in bottle: Bottle) {
+        installedGames[bottle.id] = (try? SteamStore().installedGames(in: bottle)) ?? []
     }
 }

@@ -233,6 +233,13 @@ per-bottle migration prompt, never silent reset), localization scaffold, docs.
 
 ## Risks / open questions
 
+- **winebrowser vs native Steam** (observed in Phase 3): when the in-bottle Steam
+  bootstrapper opens `steam://` URLs, Wine's winebrowser forwards them to macOS,
+  which launches the user's *native* Steam client if installed. Confusing during
+  setup. Candidate fix: disable winebrowser in bottles
+  (`WINEDLLOVERRIDES=winebrowser.exe=d`) or register a no-op steam:// handler
+  in the prefix — validate neither breaks in-client store links we care about.
+
 - **Steam client drift**: Valve ships CEF/UI changes that periodically break Wine; the
   launch-flag profile must be remotely updatable (same manifest mechanism as runtime).
 - **Runtime sourcing**: redistribution terms of candidate builds need verification in
