@@ -232,6 +232,7 @@ final class AppModel {
         guard let executor else { return }
         steamRunning.insert(bottle.id)
         activateNewWineWindows()
+        activateExistingWineWindowsSoon()
         let monitor = SteamInstaller().launch(in: bottle, executor: executor)
         Task { [weak self] in
             await monitor.value
@@ -298,6 +299,7 @@ final class AppModel {
         guard let executor else { return }
         steamRunning.insert(bottle.id)
         activateNewWineWindows()
+        activateExistingWineWindowsSoon()
         let monitor = SteamInstaller().requestInstall(
             appID: game.storeGameID, in: bottle, executor: executor
         )
@@ -314,11 +316,40 @@ final class AppModel {
         guard let executor else { return }
         steamRunning.insert(bottle.id)
         activateNewWineWindows()
+        activateExistingWineWindowsSoon()
         let monitor = SteamInstaller().requestUninstall(of: game, in: bottle, executor: executor)
         Task { [weak self] in
             await monitor.value
             self?.steamRunning.remove(bottle.id)
             self?.refreshGames(in: bottle)
+        }
+    }
+
+    /// Brings existing Wine windows forward after a short delay. Used when an
+    /// action surfaces UI *inside* an already-open window — Steam renders its
+    /// install/uninstall confirmations as modals within the client window, so
+    /// no new OS window ever appears for the new-window watcher to activate.
+    private func activateExistingWineWindowsSoon(afterSeconds delay: Double = 2.5) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(delay))
+            let info = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+            ) as? [[String: Any]] ?? []
+            var pids: Set<pid_t> = []
+            for window in info {
+                guard let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
+                      let owner = (window[kCGWindowOwnerName as String] as? String)?.lowercased(),
+                      owner == "wine" || owner.hasSuffix(".exe") || owner.contains("wine"),
+                      let pid = window[kCGWindowOwnerPID as String] as? Int
+                else { continue }
+                pids.insert(pid_t(pid))
+            }
+            for pid in pids {
+                guard let app = NSRunningApplication(processIdentifier: pid),
+                      !app.isActive else { continue }
+                NSApp.yieldActivation(to: app)
+                app.activate()
+            }
         }
     }
 
