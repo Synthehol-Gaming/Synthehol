@@ -144,6 +144,7 @@ final class AppModel {
     func launchSteam(in bottle: Bottle) {
         guard let executor else { return }
         steamRunning.insert(bottle.id)
+        activateNewWineWindows()
         let monitor = SteamInstaller().launch(in: bottle, executor: executor)
         Task { [weak self] in
             await monitor.value
@@ -156,11 +157,37 @@ final class AppModel {
     func launchGame(_ game: InstalledGame, in bottle: Bottle) {
         guard let executor else { return }
         steamRunning.insert(bottle.id)
+        activateNewWineWindows()
         let monitor = SteamInstaller().launchGame(game, in: bottle, executor: executor)
         Task { [weak self] in
             await monitor.value
             self?.steamRunning.remove(bottle.id)
             self?.refreshGames(in: bottle)
+        }
+    }
+
+    /// Wine processes aren't launched through LaunchServices, so macOS never
+    /// makes their windows frontmost (under Stage Manager they land in the side
+    /// strip as background apps). After a launch, watch for newly appearing
+    /// Wine GUI apps and hand each one activation, once.
+    private func activateNewWineWindows(deadline: TimeInterval = 90) {
+        let before = Set(NSWorkspace.shared.runningApplications.map(\.processIdentifier))
+        Task { @MainActor in
+            var activated: Set<pid_t> = []
+            let start = Date()
+            while Date().timeIntervalSince(start) < deadline {
+                try? await Task.sleep(for: .seconds(1))
+                for app in NSWorkspace.shared.runningApplications
+                where app.activationPolicy == .regular
+                    && !before.contains(app.processIdentifier)
+                    && !activated.contains(app.processIdentifier) {
+                    let name = (app.localizedName ?? "").lowercased()
+                    guard name.hasSuffix(".exe") || name.contains("wine") else { continue }
+                    NSApp.yieldActivation(to: app)
+                    app.activate()
+                    activated.insert(app.processIdentifier)
+                }
+            }
         }
     }
 
