@@ -165,8 +165,10 @@ extension LibraryView {
                 Button("Get a Key…") {
                     NSWorkspace.shared.open(URL(string: "https://steamcommunity.com/dev/apikey")!)
                 }
-                .help("Steam asks for a domain name when creating a key — any placeholder like localhost works.")
             }
+            Text("Steam's key page asks for a “domain name” — it's only a label and is never checked. Enter anything, e.g. localhost.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }
