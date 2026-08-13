@@ -92,7 +92,7 @@ struct BottleDetailView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
-                    Text("Sign in and install games through the Steam window. Note: the window's close button only hides Steam (Windows tray behavior) — use Quit Steam, or Steam ▸ Exit, to fully stop it. Synthehol cleans up the bottle's Wine processes when Steam exits.")
+                    Text("Sign in and install games through the Steam window. Closing the window exits Steam (its “Exit Steam” interface setting is on by default), and Synthehol then cleans up the bottle's Wine processes automatically. If Steam is ever configured to minimize to the tray instead, use Quit Steam.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 

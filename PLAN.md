@@ -233,6 +233,12 @@ per-bottle migration prompt, never silent reset), localization scaffold, docs.
 
 ## Risks / open questions
 
+- **Steam close-vs-tray** (resolved, Phase 3): current Steam clients default the
+  "Exit Steam" interface setting to on, so closing the window fully exits and
+  Synthehol's launch monitor then shuts the bottle down (verified live; no config
+  key is written for the default, so there is nothing to seed). If a user flips
+  Steam to minimize-to-tray, the tray is invisible under Wine — the Quit Steam /
+  Stop Bottle buttons cover that case.
 - **winebrowser vs native Steam** (observed in Phase 3): when the in-bottle Steam
   bootstrapper opens `steam://` URLs, Wine's winebrowser forwards them to macOS,
   which launches the user's *native* Steam client if installed. Confusing during
