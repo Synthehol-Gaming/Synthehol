@@ -253,10 +253,16 @@ final class AppModel {
         }
     }
 
-    /// Loads the signed-in account's owned-but-not-installed games from the
-    /// Steam community profile (no API key; requires public game details).
+    static let steamWebAPIKeyDefaultsKey = "steamWebAPIKey"
+
+    /// Loads the signed-in account's owned-but-not-installed games via the
+    /// Steam Web API (needs the user's personal API key; set in the Library's
+    /// Available to Install section).
     func refreshOwnedGames(in bottle: Bottle) async {
         guard bottle.settings.steamInstalled else { return }
+        let apiKey = (UserDefaults.standard.string(forKey: Self.steamWebAPIKeyDefaultsKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else { return } // view shows key setup instead
         guard let user = SteamStore().loginUsers(in: bottle).first else {
             ownedGamesError[bottle.id] = "Sign in to Steam once to see your library here."
             return
@@ -265,7 +271,8 @@ final class AppModel {
         defer { loadingOwnedGames.remove(bottle.id) }
         ownedGamesError[bottle.id] = nil
         do {
-            let owned = try await SteamOwnedGamesFetcher().ownedGames(steamID64: user.steamID64)
+            let owned = try await SteamOwnedGamesFetcher(apiKey: apiKey)
+                .ownedGames(steamID64: user.steamID64)
             let installedIDs = Set((installedGames[bottle.id] ?? []).map(\.storeGameID))
             ownedGames[bottle.id] = owned
                 .filter { !SteamStore.nonGameAppIDs.contains($0.appID) }
@@ -278,9 +285,9 @@ final class AppModel {
                         posterURL: URL(string: "https://steamcdn-a.akamaihd.net/steam/apps/\(game.appID)/library_600x900_2x.jpg")
                     )
                 }
-        } catch SteamOwnedGamesFetcher.FetchError.profileUnavailable(let message) {
-            ownedGamesError[bottle.id] =
-                "Steam says: \(message) To browse your library here, set Privacy ▸ Game details to Public in your Steam profile."
+        } catch SteamOwnedGamesFetcher.FetchError.invalidKey {
+            ownedGamesError[bottle.id] = "Steam rejected the API key. Check it and try again."
+            UserDefaults.standard.removeObject(forKey: Self.steamWebAPIKeyDefaultsKey)
         } catch {
             ownedGamesError[bottle.id] = "Couldn't load your Steam library right now."
         }

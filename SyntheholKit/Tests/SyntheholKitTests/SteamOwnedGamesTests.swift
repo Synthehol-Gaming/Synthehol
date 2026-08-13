@@ -3,38 +3,26 @@ import Testing
 @testable import SyntheholKit
 
 struct SteamOwnedGamesTests {
-    @Test func parsesGamesListXML() throws {
-        let xml = #"""
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <gamesList>
-            <steamID64>76561198000000000</steamID64>
-            <games>
-                <game>
-                    <appID>620</appID>
-                    <name><![CDATA[Portal 2]]></name>
-                    <logo><![CDATA[https://cdn.example/620.jpg]]></logo>
-                    <hoursOnRecord>12.4</hoursOnRecord>
-                </game>
-                <game>
-                    <appID>975370</appID>
-                    <name><![CDATA[Dwarf Fortress]]></name>
-                </game>
-            </games>
-        </gamesList>
+    @Test func parsesGetOwnedGamesJSON() throws {
+        let json = #"""
+        {"response": {"game_count": 3, "games": [
+            {"appid": 620, "name": "Portal 2", "playtime_forever": 744,
+             "img_icon_url": "abc123", "has_community_visible_stats": true},
+            {"appid": 975370, "name": "Dwarf Fortress", "playtime_forever": 60},
+            {"appid": 999999, "playtime_forever": 0}
+        ]}}
         """#
-        let games = try SteamOwnedGamesFetcher.parse(xml: Data(xml.utf8))
+        let games = try SteamOwnedGamesFetcher.parse(json: Data(json.utf8))
+        // The nameless entry (delisted app) is dropped; rest sorted by name.
         #expect(games.map(\.name) == ["Dwarf Fortress", "Portal 2"])
         #expect(games.map(\.appID) == [975370, 620])
     }
 
-    @Test func privateProfileThrowsWithSteamMessage() {
-        let xml = #"""
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <response><error><![CDATA[This profile is private.]]></error></response>
-        """#
-        #expect(throws: SteamOwnedGamesFetcher.FetchError.profileUnavailable("This profile is private.")) {
-            _ = try SteamOwnedGamesFetcher.parse(xml: Data(xml.utf8))
-        }
+    @Test func emptyOrPrivateResponseYieldsNoGames() throws {
+        // GetOwnedGames returns an empty response object when the target
+        // account's list is hidden from the requesting key.
+        let games = try SteamOwnedGamesFetcher.parse(json: Data(#"{"response": {}}"#.utf8))
+        #expect(games.isEmpty)
     }
 
     @Test func parsesLoginUsersMostRecentFirst() throws {

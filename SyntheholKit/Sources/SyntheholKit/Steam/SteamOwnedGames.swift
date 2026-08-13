@@ -45,103 +45,75 @@ public struct OwnedGame: Sendable, Equatable, Identifiable {
     }
 }
 
-/// Fetches an account's owned games from the Steam community profile XML —
-/// no API key needed, but the profile's game details must not be private.
+/// Fetches an account's owned games via the official Steam Web API
+/// (`IPlayerService/GetOwnedGames`).
+///
+/// Requires a free personal API key (https://steamcommunity.com/dev/apikey).
+/// Valve removed the old anonymous community-profile XML endpoint (it now
+/// redirects to a login page), so a key is the supported path — and unlike the
+/// community profile, your own key sees your own library regardless of the
+/// profile's privacy settings.
 public struct SteamOwnedGamesFetcher: Sendable {
     public enum FetchError: Error, Equatable {
-        /// The profile (or its game details) is private; the XML carries
-        /// Steam's message.
-        case profileUnavailable(String)
-        case requestFailed
+        case invalidKey
+        case requestFailed(Int)
     }
 
+    private let apiKey: String
     private let session: URLSession
+    private let baseURL: URL
 
-    public init(session: URLSession = .shared) {
+    public init(
+        apiKey: String,
+        session: URLSession = .shared,
+        baseURL: URL = URL(string: "https://api.steampowered.com")!
+    ) {
+        self.apiKey = apiKey
         self.session = session
+        self.baseURL = baseURL
     }
 
     public func ownedGames(steamID64: String) async throws -> [OwnedGame] {
-        let url = URL(string: "https://steamcommunity.com/profiles/\(steamID64)/games?tab=all&xml=1")!
-        guard let (data, response) = try? await session.data(from: url),
-              (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true
-        else { throw FetchError.requestFailed }
-        return try Self.parse(xml: data)
+        var components = URLComponents(
+            url: baseURL.appending(path: "IPlayerService/GetOwnedGames/v1/"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "key", value: apiKey),
+            URLQueryItem(name: "steamid", value: steamID64),
+            URLQueryItem(name: "include_appinfo", value: "1"),
+            URLQueryItem(name: "include_played_free_games", value: "1"),
+            URLQueryItem(name: "format", value: "json")
+        ]
+        let (data, response) = try await session.data(from: components.url!)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        switch status {
+        case 200..<300:
+            return try Self.parse(json: data)
+        case 401, 403:
+            throw FetchError.invalidKey
+        default:
+            throw FetchError.requestFailed(status)
+        }
     }
 
-    /// Parses the `gamesList` XML. Exposed for testing.
-    public static func parse(xml: Data) throws -> [OwnedGame] {
-        let parser = GamesXMLParser()
-        try parser.run(xml)
-        if let error = parser.errorText, parser.games.isEmpty {
-            throw FetchError.profileUnavailable(error)
-        }
-        return parser.games.sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
-    }
-
-    private final class GamesXMLParser: NSObject, XMLParserDelegate {
-        var games: [OwnedGame] = []
-        var errorText: String?
-
-        private var currentElement = ""
-        private var currentAppID: Int?
-        private var currentName = ""
-        private var buffer = ""
-        private var insideGame = false
-
-        func run(_ data: Data) throws {
-            let parser = XMLParser(data: data)
-            parser.delegate = self
-            guard parser.parse() || !games.isEmpty || errorText != nil else {
-                throw FetchError.requestFailed
+    /// Parses the GetOwnedGames JSON envelope. Exposed for testing.
+    static func parse(json: Data) throws -> [OwnedGame] {
+        struct Envelope: Decodable {
+            struct Inner: Decodable {
+                let games: [Game]?
             }
-        }
-
-        func parser(
-            _ parser: XMLParser, didStartElement element: String,
-            namespaceURI: String?, qualifiedName: String?,
-            attributes: [String: String] = [:]
-        ) {
-            currentElement = element
-            buffer = ""
-            if element == "game" {
-                insideGame = true
-                currentAppID = nil
-                currentName = ""
+            struct Game: Decodable {
+                let appid: Int
+                let name: String?
             }
+            let response: Inner
         }
-
-        func parser(_ parser: XMLParser, foundCharacters string: String) {
-            buffer += string
-        }
-
-        func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
-            buffer += String(data: CDATABlock, encoding: .utf8) ?? ""
-        }
-
-        func parser(
-            _ parser: XMLParser, didEndElement element: String,
-            namespaceURI: String?, qualifiedName: String?
-        ) {
-            let text = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
-            switch element {
-            case "appID" where insideGame:
-                currentAppID = Int(text)
-            case "name" where insideGame:
-                currentName = text
-            case "game":
-                insideGame = false
-                if let appID = currentAppID, !currentName.isEmpty {
-                    games.append(OwnedGame(appID: appID, name: currentName))
-                }
-            case "error":
-                errorText = text
-            default:
-                break
+        let envelope = try JSONDecoder().decode(Envelope.self, from: json)
+        return (envelope.response.games ?? [])
+            .compactMap { game in
+                game.name.map { OwnedGame(appID: game.appid, name: $0) }
             }
-            buffer = ""
-        }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }

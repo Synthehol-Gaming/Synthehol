@@ -9,6 +9,8 @@ struct LibraryView: View {
     @State private var settingsGame: InstalledGame?
     @State private var artworkGame: InstalledGame?
     @State private var uninstallCandidate: InstalledGame?
+    @AppStorage(AppModel.steamWebAPIKeyDefaultsKey) var steamWebAPIKey = ""
+    @State private var apiKeyDraft = ""
 
     private var games: [InstalledGame] { model.installedGames[bottle.id] ?? [] }
 
@@ -120,8 +122,11 @@ extension LibraryView {
                     Task { await model.refreshOwnedGames(in: bottle) }
                 }
                 .labelStyle(.iconOnly)
+                .disabled(steamWebAPIKey.isEmpty)
             }
-            if let error = model.ownedGamesError[bottle.id] {
+            if steamWebAPIKey.isEmpty {
+                apiKeySetup
+            } else if let error = model.ownedGamesError[bottle.id] {
                 Text(error)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -137,6 +142,30 @@ extension LibraryView {
                 ForEach(available) { game in
                     AvailableGameTile(game: game, bottle: bottle)
                 }
+            }
+        }
+    }
+}
+
+extension LibraryView {
+    @ViewBuilder
+    var apiKeySetup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Browse your whole Steam library here — installed or not — with a free Steam Web API key (one-time setup; works even if your profile is private).")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            HStack {
+                SecureField("Paste your Steam Web API key", text: $apiKeyDraft)
+                    .frame(maxWidth: 300)
+                Button("Save") {
+                    steamWebAPIKey = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    Task { await model.refreshOwnedGames(in: bottle) }
+                }
+                .disabled(apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Get a Key…") {
+                    NSWorkspace.shared.open(URL(string: "https://steamcommunity.com/dev/apikey")!)
+                }
+                .help("Steam asks for a domain name when creating a key — any placeholder like localhost works.")
             }
         }
     }
