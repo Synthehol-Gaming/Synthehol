@@ -57,6 +57,24 @@ public enum GameNudger {
         return pids.count
     }
 
+    /// Terminates every process launched from the game's install directory.
+    /// Give Wine a brief chance to shut down cleanly, then kill any helpers or
+    /// wedged processes that remain. Returns the number initially targeted.
+    @discardableResult
+    public static func forceQuit(
+        _ game: InstalledGame,
+        onEvent: (@Sendable (String) -> Void)? = nil
+    ) async -> Int {
+        let pids = await processIDs(for: game)
+        for pid in pids { kill(pid, SIGTERM) }
+        if !pids.isEmpty {
+            try? await Task.sleep(for: .seconds(1))
+            for pid in await processIDs(for: game) { kill(pid, SIGKILL) }
+        }
+        onEvent?("force quit \(game.name) (targeted pids \(pids.map(String.init).joined(separator: ", ")))")
+        return pids.count
+    }
+
     /// Watches for the game's process after launch and nudges it at each
     /// schedule offset. Ends when the schedule completes, the game exits, or
     /// the task is cancelled; give up quietly if no process appears within

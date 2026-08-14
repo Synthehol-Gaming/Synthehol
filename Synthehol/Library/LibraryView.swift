@@ -293,6 +293,7 @@ struct GameTile: View {
                             Text("Starting…")
                                 .font(.callout.weight(.medium))
                                 .foregroundStyle(.white)
+                            forceQuitButton
                         }
                     case .running:
                         VStack {
@@ -307,6 +308,7 @@ struct GameTile: View {
                                     .padding(6)
                             }
                             Spacer()
+                            if hovering { forceQuitButton.padding(.bottom, 12) }
                         }
                     case nil:
                         if hovering {
@@ -348,6 +350,11 @@ struct GameTile: View {
             }
             .disabled(runState != nil)
             Button("Nudge Frozen Game") { model.nudgeGame(game) }
+                .disabled(runState == nil)
+            Button("Force Quit Game", systemImage: "xmark.octagon", role: .destructive) {
+                model.forceQuitGame(game)
+            }
+            .disabled(runState == nil)
             Button("Show Session Logs") { model.showSessionLogs() }
             Divider()
             Button("Game Settings…") { onSettings() }
@@ -360,6 +367,15 @@ struct GameTile: View {
             Button("Uninstall…", role: .destructive) { onUninstall() }
         }
         .help(game.name)
+    }
+
+    private var forceQuitButton: some View {
+        Button("Force Quit", systemImage: "xmark.octagon.fill", role: .destructive) {
+            model.forceQuitGame(game)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.red)
+        .controlSize(.small)
     }
 
     @ViewBuilder

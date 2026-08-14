@@ -488,6 +488,7 @@ final class AppModel {
             let deadline = ContinuousClock.now + startupTimeout
             while !Task.isCancelled {
                 if await !GameNudger.processIDs(for: game).isEmpty {
+                    guard !Task.isCancelled else { return }
                     gameStateLog.log("\(game.name, privacy: .public): running")
                     self?.gameRunStates[game.id] = .running
                     break
@@ -526,6 +527,19 @@ final class AppModel {
             if nudged == 0 {
                 self?.lastError = "\"\(game.name)\" doesn't seem to be running."
             }
+        }
+    }
+
+    /// Stops the game's Wine processes and unconditionally releases the UI's
+    /// launch state. The immediate clear is intentional: this is also the
+    /// recovery path when process detection is stuck on an orphaned helper.
+    func forceQuitGame(_ game: InstalledGame) {
+        gameStateLog.log("\(game.name, privacy: .public): force quit requested")
+        gameWatchers.removeValue(forKey: game.id)?.cancel()
+        gameRunStates[game.id] = nil
+        Task { [weak self] in
+            _ = await GameNudger.forceQuit(game)
+            self?.gameRunStates[game.id] = nil
         }
     }
 
