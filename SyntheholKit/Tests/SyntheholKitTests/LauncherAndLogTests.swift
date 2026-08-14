@@ -69,6 +69,35 @@ struct LauncherExporterTests {
     }
 }
 
+struct SteamRunningDetectionTests {
+    /// A bottle nothing has ever run in must read as not running, even while
+    /// unrelated Steam processes may exist on the machine.
+    @Test func unusedBottleIsNotRunning() async {
+        let bottle = Bottle(
+            url: URL(filePath: "/tmp/synthehol-nonexistent-\(UUID().uuidString)"),
+            settings: BottleSettings(name: "B")
+        )
+        #expect(await SteamInstaller().isRunning(in: bottle) == false)
+    }
+}
+
+struct DebugLaunchEnvironmentTests {
+    /// The debug profile must override the base environment's quiet
+    /// `WINEDEBUG=fixme-all` (extras win in the merge) so debug launches
+    /// actually get verbose output.
+    @Test func debugEnvironmentOverridesQuietDefaults() {
+        let executor = WineExecutor(
+            runtime: WineRuntime(version: "test", rootDirectory: URL(filePath: "/tmp/rt"))
+        )
+        let bottle = Bottle(url: URL(filePath: "/tmp/b"), settings: BottleSettings(name: "B"))
+        let env = executor.environment(for: bottle, extra: SteamInstaller.debugEnvironment)
+        #expect(env["WINEDEBUG"] == SteamInstaller.debugEnvironment["WINEDEBUG"])
+        #expect(env["WINEDEBUG"]?.contains("fixme-all") == false)
+        #expect(env["WINEDEBUG"]?.contains("+timestamp") == true)
+        #expect(env["GST_DEBUG"] == SteamInstaller.debugEnvironment["GST_DEBUG"])
+    }
+}
+
 struct WineLogWriterTests {
     @Test func writesHeaderAndAppendsLines() throws {
         let temp = try makeTempDirectory()

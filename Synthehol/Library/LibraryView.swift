@@ -12,7 +12,18 @@ struct LibraryView: View {
     @AppStorage(AppModel.steamWebAPIKeyDefaultsKey) var steamWebAPIKey = ""
     @State private var apiKeyDraft = ""
 
-    private var games: [InstalledGame] { model.installedGames[bottle.id] ?? [] }
+    private var allGames: [InstalledGame] { model.installedGames[bottle.id] ?? [] }
+
+    /// Installed games matching the sidebar filter. Games whose metadata
+    /// hasn't loaded yet only appear under All Games.
+    private var games: [InstalledGame] {
+        switch model.selectedGameFilter {
+        case .all:
+            allGames
+        case .genre(let genre):
+            allGames.filter { model.gameMetadata[$0.id]?.genres.contains(genre) == true }
+        }
+    }
 
     var body: some View {
         Group {
@@ -32,7 +43,7 @@ struct LibraryView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(model.runtime == nil || !bottle.prefixExists)
                         if !bottle.prefixExists {
-                            Text("The bottle is still initializing…")
+                            Text("This configuration is still initializing…")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -41,7 +52,7 @@ struct LibraryView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        if games.isEmpty {
+                        if allGames.isEmpty {
                             VStack(spacing: 10) {
                                 Label("No Games Installed", systemImage: "gamecontroller")
                                     .font(.title3)
@@ -54,6 +65,12 @@ struct LibraryView: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 30)
+                        } else if games.isEmpty {
+                            Text("No installed games match this filter.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 30)
                         } else {
                             LazyVGrid(
                                 columns: [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 20)],
@@ -71,7 +88,11 @@ struct LibraryView: View {
                             }
                         }
 
-                        availableSection
+                        // Install-browsing belongs to the unfiltered view;
+                        // owned-but-not-installed games have no metadata yet.
+                        if model.selectedGameFilter == .all {
+                            availableSection
+                        }
                     }
                     .padding(20)
                 }
@@ -252,6 +273,7 @@ struct GameTile: View {
     @State private var hovering = false
 
     private var poster: NSImage? { model.posterImages[game.id] }
+    private var runState: AppModel.GameRunState? { model.gameRunStates[game.id] }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -261,16 +283,43 @@ struct GameTile: View {
                 .aspectRatio(2 / 3, contentMode: .fit)
                 .overlay { posterView }
                 .overlay {
-                    if hovering {
-                        Color.black.opacity(0.35)
-                        Button {
-                            model.launchGame(game, in: bottle)
-                        } label: {
-                            Image(systemName: "play.circle.fill")
-                                .font(.system(size: 52))
-                                .foregroundStyle(.white, .black.opacity(0.55))
+                    switch runState {
+                    case .starting:
+                        Color.black.opacity(0.55)
+                        VStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.large)
+                                .tint(.white)
+                            Text("Starting…")
+                                .font(.callout.weight(.medium))
+                                .foregroundStyle(.white)
                         }
-                        .buttonStyle(.plain)
+                    case .running:
+                        VStack {
+                            HStack {
+                                Spacer()
+                                Label("Running", systemImage: "play.fill")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(.green.opacity(0.9), in: Capsule())
+                                    .padding(6)
+                            }
+                            Spacer()
+                        }
+                    case nil:
+                        if hovering {
+                            Color.black.opacity(0.35)
+                            Button {
+                                model.launchGame(game, in: bottle)
+                            } label: {
+                                Image(systemName: "play.circle.fill")
+                                    .font(.system(size: 52))
+                                    .foregroundStyle(.white, .black.opacity(0.55))
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
             .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -293,6 +342,14 @@ struct GameTile: View {
         }
         .contextMenu {
             Button("Play") { model.launchGame(game, in: bottle) }
+                .disabled(runState != nil)
+            Button("Play with Debug Log") {
+                model.launchGame(game, in: bottle, debugLogging: true)
+            }
+            .disabled(runState != nil)
+            Button("Nudge Frozen Game") { model.nudgeGame(game) }
+            Button("Show Session Logs") { model.showSessionLogs() }
+            Divider()
             Button("Game Settings…") { onSettings() }
             Button("Change Artwork…") { onArtwork() }
             Divider()
@@ -335,6 +392,7 @@ struct GameSettingsSheet: View {
 
     @State private var launchArguments = ""
     @State private var environmentText = ""
+    @State private var nudgeStuckLoading = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -356,6 +414,13 @@ struct GameSettingsSheet: View {
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.separator))
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Nudge stuck loading screens", isOn: $nudgeStuckLoading)
+                Text("Works around a compatibility bug that freezes some games on their loading screen: briefly pauses and resumes the game a few times during startup.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
@@ -375,6 +440,7 @@ struct GameSettingsSheet: View {
     private func load() {
         let settings = GameSettings.load(for: game, in: bottle)
         launchArguments = settings.launchArguments
+        nudgeStuckLoading = settings.nudgeStuckLoading
         environmentText = settings.environment
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
@@ -391,7 +457,8 @@ struct GameSettingsSheet: View {
         }
         let settings = GameSettings(
             launchArguments: launchArguments.trimmingCharacters(in: .whitespaces),
-            environment: environment
+            environment: environment,
+            nudgeStuckLoading: nudgeStuckLoading
         )
         try? settings.save(for: game, in: bottle)
     }

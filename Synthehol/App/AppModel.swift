@@ -1,7 +1,12 @@
 import AppKit
 import Foundation
 import Observation
+import os
 import SyntheholKit
+
+private let gameStateLog = Logger(
+    subsystem: "com.colinobrien.Synthehol", category: "game-state"
+)
 
 /// App-wide observable state: the runtime, the bottle list, and operations on
 /// them. All mutations funnel through here; SyntheholKit stays UI-free.
@@ -24,6 +29,34 @@ final class AppModel {
     var loadingOwnedGames: Set<Bottle.ID> = []
     var lastError: String?
 
+    /// Per-game launch lifecycle, keyed by game ID. `starting` from the Play
+    /// click until the game's process appears; `running` while it exists.
+    /// Absent = not running (including after a crash — the watcher clears it
+    /// when the process disappears, however it went).
+    enum GameRunState: Equatable { case starting, running }
+    var gameRunStates: [String: GameRunState] = [:]
+    private var gameWatchers: [String: Task<Void, Never>] = [:]
+
+    /// Sidebar library filter. Genres come from cached store metadata.
+    enum GameFilter: Hashable { case all, genre(String) }
+    var selectedGameFilter: GameFilter = .all
+    /// Store metadata per game ID, loaded lazily as libraries refresh.
+    var gameMetadata: [String: SteamAppMetadata] = [:]
+    private let metadataStore = SteamMetadataStore()
+
+    /// Genres present in the selected configuration's installed library,
+    /// with counts, for the sidebar filter list.
+    var sidebarGenres: [(genre: String, count: Int)] {
+        guard let bottle = selectedBottle else { return [] }
+        var counts: [String: Int] = [:]
+        for game in installedGames[bottle.id] ?? [] {
+            for genre in gameMetadata[game.id]?.genres ?? [] {
+                counts[genre, default: 0] += 1
+            }
+        }
+        return counts.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+    }
+
     private let artworkCache = ArtworkCache()
     /// Observable so tiles update the moment artwork changes.
     var posterImages: [String: NSImage] = [:]
@@ -44,6 +77,74 @@ final class AppModel {
         bottles = await bottleStore.bottles()
         if selectedBottleID == nil { selectedBottleID = bottles.first?.id }
         WineLogWriter.deleteOldLogs()
+        await repairIncompleteD3DMetalDeployments()
+        await adoptRunningSessions()
+    }
+
+    /// Repairs bottles configured by builds that installed only D3DMetal's
+    /// Mac-side payload. Those bottles silently selected wined3d/Vulkan for
+    /// games and failed D3D11 initialization.
+    private func repairIncompleteD3DMetalDeployments() async {
+        guard let executor else { return }
+        for bottle in bottles
+        where bottle.settings.graphicsBackend == .d3dMetal
+            && GraphicsBackendDeployer.d3dMetalNeedsRepair(in: bottle) {
+            do {
+                // Steam launched before the repair retains the old DLL load
+                // policy and hands it to games through its existing process.
+                // A one-time full bottle restart is required for the repaired
+                // backend to become effective.
+                try? await executor.killBottle(bottle)
+                steamRunning.remove(bottle.id)
+                try GraphicsBackendDeployer.apply(
+                    .d3dMetal, runtime: executor.runtime, bottle: bottle
+                )
+                try await executor.applyRegistrySettings(for: bottle)
+            } catch {
+                lastError = "Couldn't repair D3DMetal for \"\(bottle.settings.name)\": \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private var didCleanUpOrphans = false
+
+    /// Re-attaches to Steam sessions that outlived a previous app run: restores
+    /// the running indicator and a monitor that shuts the bottle down when the
+    /// client exits. Without this, quitting the app orphans the session and
+    /// wineserver lingers forever after Steam closes (Whisky #680).
+    ///
+    /// The opposite orphan flavor — Steam already exited but wineserver and
+    /// Wine's start.exe waiters linger — is cleaned up once at startup only:
+    /// later refreshes could otherwise kill Wine tools or CLI sessions the
+    /// user opened while the app runs.
+    private func adoptRunningSessions() async {
+        guard let executor else { return }
+        let steam = SteamInstaller()
+        for bottle in bottles where bottle.settings.steamInstalled {
+            guard !steamRunning.contains(bottle.id) else { continue }
+            guard await steam.isRunning(in: bottle) else {
+                if !didCleanUpOrphans, !busyBottleIDs.contains(bottle.id) {
+                    try? await executor.killBottle(bottle)
+                }
+                continue
+            }
+            steamRunning.insert(bottle.id)
+            refreshGames(in: bottle)
+            // Restore "Running" badges for games that survived the relaunch.
+            for game in installedGames[bottle.id] ?? [] where gameRunStates[game.id] == nil {
+                if await !GameNudger.processIDs(for: game).isEmpty {
+                    gameRunStates[game.id] = .running
+                    watchGame(game)
+                }
+            }
+            let monitor = steam.adoptSession(in: bottle, executor: executor)
+            Task { [weak self] in
+                await monitor.value
+                self?.steamRunning.remove(bottle.id)
+                self?.refreshGames(in: bottle)
+            }
+        }
+        didCleanUpOrphans = true
     }
 
     // MARK: Launcher URLs (synthehol://launch?bottle=…&store=…&game=…)
@@ -68,7 +169,7 @@ final class AppModel {
         guard let bottle = bottles.first(where: {
             $0.url.canonicalPath == canonical
         }) else {
-            lastError = "This launcher points to a bottle Synthehol no longer knows about."
+            lastError = "This launcher points to a configuration Synthehol no longer knows about."
             return
         }
         selectedBottleID = bottle.id
@@ -122,23 +223,91 @@ final class AppModel {
 
     // MARK: Runtime
 
-    func installRuntime() async {
+    func installRuntime(_ manifest: RuntimeManifest = .stableDefault) async {
         runtimeProgress = .downloading(bytesDownloaded: 0, totalBytes: nil)
         defer { runtimeProgress = nil }
         do {
-            runtime = try await runtimeStore.install(RuntimeManifest.stableDefault) { progress in
+            runtime = try await runtimeStore.install(manifest) { progress in
                 Task { @MainActor [weak self] in self?.runtimeProgress = progress }
             }
+            await redeployBackendsAfterRuntimeChange()
         } catch {
             lastError = "Runtime install failed: \(error.localizedDescription)"
         }
+    }
+
+    /// A new Wine version updates each prefix on first boot and overwrites
+    /// deployed backend DLLs with fresh builtins (this silently broke the
+    /// deployed backend after a runtime switch). Force the prefix update now,
+    /// then put every bottle's backend DLLs back.
+    private func redeployBackendsAfterRuntimeChange() async {
+        guard let executor else { return }
+        for bottle in bottles where bottle.prefixExists {
+            busyBottleIDs.insert(bottle.id)
+            defer { busyBottleIDs.remove(bottle.id) }
+            // Backups belong to the previous runtime; discard them so
+            // wineboot regenerates fresh builtins instead of a later
+            // restore resurrecting outdated DLLs.
+            try? GraphicsBackendDeployer.resetToBuiltins(in: bottle)
+            _ = try? await executor.runWine(["wineboot", "-u"], bottle: bottle)
+            do {
+                try GraphicsBackendDeployer.apply(
+                    bottle.settings.graphicsBackend, runtime: executor.runtime, bottle: bottle
+                )
+            } catch {
+                // D3DMetal prerequisites may be missing mid-setup; the
+                // settings form surfaces state, so stay quiet here.
+                Log.steam.error("Backend redeploy failed for \(bottle.settings.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    // MARK: D3DMetal (Game Porting Toolkit)
+
+    var d3dMetalOSSupported: Bool { D3DMetalSupport.osSupported }
+    var gptkImported = D3DMetalSupport.isImported
+    var runtimeSupportsD3DMetal: Bool {
+        runtime.map(D3DMetalSupport.runtimeSupports) ?? false
+    }
+    /// All prerequisites met: the backend picker's D3DMetal option unlocks.
+    var d3dMetalReady: Bool {
+        d3dMetalOSSupported && gptkImported && runtimeSupportsD3DMetal
+    }
+
+    /// Asks for the mounted GPTK volume (pre-selected when detected) and
+    /// imports its libraries.
+    func importGPTK() async {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.message = "Choose the mounted Game Porting Toolkit disk image from Apple's download (or its \"redist\" folder)."
+        panel.prompt = "Import"
+        panel.directoryURL = D3DMetalSupport.mountedGPTKVolume()
+            ?? URL(filePath: "/Volumes")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try await D3DMetalSupport.importGPTK(from: url)
+            gptkImported = D3DMetalSupport.isImported
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// Installs the GPTK-capable beta runtime (the stable runtime is kept
+    /// for rollback by the runtime store).
+    func installBetaRuntime() async {
+        await installRuntime(.gptkBeta)
     }
 
     // MARK: Bottles
 
     func createBottle(name: String, windowsVersion: WindowsVersion) async {
         guard let executor else {
-            lastError = "Install the Wine runtime before creating a bottle."
+            lastError = "Install the runtime before creating a configuration."
+            return
+        }
+        guard await Task.detached(operation: { Rosetta2.isInstalled }).value else {
+            lastError = "Rosetta 2 is required to run Windows games. Install it in Terminal with: softwareupdate --install-rosetta"
             return
         }
         do {
@@ -154,7 +323,7 @@ final class AppModel {
             )
             await refresh()
         } catch {
-            lastError = "Couldn't create bottle: \(error.localizedDescription)"
+            lastError = "Couldn't create configuration: \(error.localizedDescription)"
         }
     }
 
@@ -165,7 +334,7 @@ final class AppModel {
             if selectedBottleID == bottle.id { selectedBottleID = nil }
             await refresh()
         } catch {
-            lastError = "Couldn't delete bottle: \(error.localizedDescription)"
+            lastError = "Couldn't delete configuration: \(error.localizedDescription)"
         }
     }
 
@@ -174,7 +343,7 @@ final class AppModel {
             _ = try await bottleStore.rename(bottle, to: name)
             await refresh()
         } catch {
-            lastError = "Couldn't rename bottle: \(error.localizedDescription)"
+            lastError = "Couldn't rename configuration: \(error.localizedDescription)"
         }
     }
 
@@ -213,7 +382,7 @@ final class AppModel {
 
     func installSteam(in bottle: Bottle) async {
         guard let executor else {
-            lastError = "Install the Wine runtime first."
+            lastError = "Install the runtime first."
             return
         }
         steamProgress[bottle.id] = .downloading(bytesDownloaded: 0, totalBytes: nil)
@@ -233,25 +402,109 @@ final class AppModel {
         steamRunning.insert(bottle.id)
         activateNewWineWindows()
         activateExistingWineWindowsSoon()
-        let monitor = SteamInstaller().launch(in: bottle, executor: executor)
+        let session = SteamInstaller().launch(in: bottle, executor: executor)
         Task { [weak self] in
-            await monitor.value
+            await session.task.value
             self?.steamRunning.remove(bottle.id)
             self?.refreshGames(in: bottle)
         }
     }
 
     /// Launches a game via Steam (`-applaunch`); Steam boots first if needed.
-    func launchGame(_ game: InstalledGame, in bottle: Bottle) {
+    /// With `debugLogging`, Wine runs with verbose diagnostics and the session
+    /// log opens in Console.app so output can be watched live.
+    func launchGame(_ game: InstalledGame, in bottle: Bottle, debugLogging: Bool = false) {
         guard let executor else { return }
+        guard gameRunStates[game.id] == nil else { return } // already starting/running
+        gameStateLog.log("\(game.name, privacy: .public): starting")
+        gameRunStates[game.id] = .starting
+        watchGame(game)
         steamRunning.insert(bottle.id)
         activateNewWineWindows()
-        let monitor = SteamInstaller().launchGame(game, in: bottle, executor: executor)
+        let session = SteamInstaller().launchGame(
+            game, in: bottle, executor: executor, debugLogging: debugLogging
+        )
+        if debugLogging, let logURL = session.logFileURL {
+            openLogInConsole(logURL)
+        }
         Task { [weak self] in
-            await monitor.value
+            await session.task.value
             self?.steamRunning.remove(bottle.id)
             self?.refreshGames(in: bottle)
         }
+    }
+
+    /// Opens a session log in Console.app (which follows appended lines live);
+    /// falls back to revealing it in Finder.
+    private func openLogInConsole(_ url: URL) {
+        let console = URL(filePath: "/System/Applications/Utilities/Console.app")
+        NSWorkspace.shared.open(
+            [url], withApplicationAt: console, configuration: NSWorkspace.OpenConfiguration()
+        ) { _, error in
+            if error != nil {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        }
+    }
+
+    /// Tracks a launched game's real process through its lifecycle: waits for
+    /// it to appear (Steam boot + game boot can be slow — generous timeout,
+    /// after which the state reverts so a failed launch doesn't wedge the
+    /// Play button), then watches until it disappears — normal quit and crash
+    /// look the same and both return the tile to "not running".
+    private func watchGame(_ game: InstalledGame, startupTimeout: Duration = .seconds(300)) {
+        gameWatchers[game.id]?.cancel()
+        gameWatchers[game.id] = Task { [weak self] in
+            let deadline = ContinuousClock.now + startupTimeout
+            while !Task.isCancelled {
+                if await !GameNudger.processIDs(for: game).isEmpty {
+                    gameStateLog.log("\(game.name, privacy: .public): running")
+                    self?.gameRunStates[game.id] = .running
+                    break
+                }
+                guard ContinuousClock.now < deadline else {
+                    gameStateLog.log("\(game.name, privacy: .public): startup timed out, clearing")
+                    self?.gameRunStates[game.id] = nil
+                    return
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+            // Require two consecutive empty polls before declaring the game
+            // gone — a single pgrep/lsof hiccup must not clear a live game.
+            var misses = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                if await GameNudger.processIDs(for: game).isEmpty {
+                    misses += 1
+                    if misses >= 2 {
+                        gameStateLog.log("\(game.name, privacy: .public): process gone, clearing")
+                        self?.gameRunStates[game.id] = nil
+                        return
+                    }
+                } else {
+                    misses = 0
+                }
+            }
+        }
+    }
+
+    /// Manual escape hatch for the Wine loading livelock: suspends and
+    /// resumes the game's processes to break the spin (see `GameNudger`).
+    func nudgeGame(_ game: InstalledGame) {
+        Task { [weak self] in
+            let nudged = await GameNudger.nudgeNow(game)
+            if nudged == 0 {
+                self?.lastError = "\"\(game.name)\" doesn't seem to be running."
+            }
+        }
+    }
+
+    /// Reveals the session-log folder in Finder.
+    func showSessionLogs() {
+        try? FileManager.default.createDirectory(
+            at: SyntheholPaths.logs, withIntermediateDirectories: true
+        )
+        NSWorkspace.shared.open(SyntheholPaths.logs)
     }
 
     static let steamWebAPIKeyDefaultsKey = "steamWebAPIKey"
@@ -300,11 +553,11 @@ final class AppModel {
         steamRunning.insert(bottle.id)
         activateNewWineWindows()
         activateExistingWineWindowsSoon()
-        let monitor = SteamInstaller().requestInstall(
+        let session = SteamInstaller().requestInstall(
             appID: game.storeGameID, in: bottle, executor: executor
         )
         Task { [weak self] in
-            await monitor.value
+            await session.task.value
             self?.steamRunning.remove(bottle.id)
             self?.refreshGames(in: bottle)
         }
@@ -317,9 +570,9 @@ final class AppModel {
         steamRunning.insert(bottle.id)
         activateNewWineWindows()
         activateExistingWineWindowsSoon()
-        let monitor = SteamInstaller().requestUninstall(of: game, in: bottle, executor: executor)
+        let session = SteamInstaller().requestUninstall(of: game, in: bottle, executor: executor)
         Task { [weak self] in
-            await monitor.value
+            await session.task.value
             self?.steamRunning.remove(bottle.id)
             self?.refreshGames(in: bottle)
         }
@@ -404,6 +657,21 @@ final class AppModel {
         let installedIDs = Set((installedGames[bottle.id] ?? []).map(\.storeGameID))
         ownedGames[bottle.id]?.removeAll { installedIDs.contains($0.storeGameID) }
         startWatchingIfNeeded(bottle)
+        loadMetadata(for: installedGames[bottle.id] ?? [])
+    }
+
+    /// Fills `gameMetadata` for games that don't have it yet (disk-cached,
+    /// so this is usually instant after first launch).
+    private func loadMetadata(for games: [InstalledGame]) {
+        let missing = games.filter { gameMetadata[$0.id] == nil }
+        guard !missing.isEmpty else { return }
+        Task { [weak self, metadataStore] in
+            for game in missing {
+                guard let metadata = await metadataStore.metadata(forAppID: game.storeGameID)
+                else { continue }
+                self?.gameMetadata[game.id] = metadata
+            }
+        }
     }
 
     /// Poster image for a game, from the artwork cache (memory → disk → CDN →
@@ -447,7 +715,7 @@ final class AppModel {
         if bottle.settings.steamInstalled {
             await steam.requestExit(in: bottle, executor: executor)
             for _ in 0..<5 {
-                if await !executor.isProcessRunning(imageName: "steam.exe", bottle: bottle) { break }
+                if await !steam.isRunning(in: bottle) { break }
                 try? await Task.sleep(for: .seconds(3))
             }
         }

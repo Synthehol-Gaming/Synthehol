@@ -78,6 +78,45 @@ most decisions below.
    `.exe`s found by walking `Program Files`. → Steam-native model (below) is the core
    of Synthehol.
 
+### Lessons from Whisky's issue tracker (reviewed 2026-08-14)
+
+- **Scope DLL overrides per-app, never bottle-wide** (whisky#836: a `dwrite`
+  override added for a game broke steamwebhelper). Everything launches through
+  steam.exe, so per-game `WINEDLLOVERRIDES` env leaks into Steam. Future per-game
+  overrides (incl. per-game graphics backend, whisky#1213) must use
+  `HKCU\Software\Wine\AppDefaults\<exe>\DllOverrides` registry keys.
+- **Steam self-updates can break under any pinned Wine overnight**
+  (whisky#1199/#1336). Escape hatch: downgrade via
+  `-forcesteamupdate -forcepackagedownload -overridepackageurl <archived client url>
+  -exitsteam`, then pin with `-noverifyfiles -nobootstrapupdate -skipinitialbootstrap
+  -norepairfiles`. `SteamInstaller.defaultLaunchArguments` is the injection point.
+- **Never branch on Wine's textual output** (whisky#435: `reg` errors are localized
+  and arrive mojibake in non-UTF-8 locales). Use exit codes or write-then-read.
+- **Wine-under-Rosetta can livelock, not just crash** (Core Keeper, diagnosed
+  2026-08-14): Mono's Boehm-GC suspend-retry loop spins forever during Unity
+  asset loads; SIGSTOP+SIGCONT of the process breaks it. `GameNudger` +
+  per-game "Nudge stuck loading" setting are the workaround.
+- **D3DMetal on the 4.0 beta runtime (learned live, 2026-08-14)**: GPTK's Windows-side
+  bridge DLLs are Wine builtin PE modules and must replace the runtime's
+  `x86_64-windows` modules (copying them into a prefix does not select them);
+  otherwise Wine's stock PE modules silently route games to wined3d/Vulkan even
+  when the Mac-side pieces are present. GPTK's Mac-side
+  libs go in `Wine/lib/external/` with `x86_64-unix/{d3d10,d3d11,d3d12,dxgi}.so` as
+  *symlinks* to `../../external/libd3dshared.dylib` (per the runtime's README —
+  copies break `@loader_path` fatally). A runtime switch triggers a prefix update
+  that overwrites deployed backend DLLs — run `wineboot -u` then redeploy every
+  bottle's backend after installing a runtime. Steam's client cannot render through
+  the GPTK shims *or* this runtime's builtin wined3d (both black-screen): scope
+  Steam to DXVK by copying DXVK DLLs into Steam's own directories (app-local wins
+  over system32). D3DMetal needs `ROSETTA_ADVERTISE_AVX=1` unconditionally. Retina
+  Mode mis-scales the DXVK-scoped Steam window (2x UI in a 1x window) — keep it
+  off in D3DMetal bottles.
+- Deferred, verify-before-applying: CrossOver's Steam bottle registry provisioning
+  (whisky#41: `GPUAccelWebViews=0`, steamwebhelper `LargeAddressAware=1`, corefonts)
+  only if login/render regressions appear; legacy-audio per-game tweaks
+  (whisky#637 native dsound, whisky#233 faudio — Wine 9+ ships FAudio builtin);
+  44.1 kHz host sample-rate workaround (whisky#445).
+
 ## Architecture
 
 ```

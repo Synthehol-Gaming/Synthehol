@@ -9,10 +9,30 @@ import Foundation
 public struct GameSettings: Codable, Equatable, Sendable {
     public var launchArguments: String
     public var environment: [String: String]
+    /// Wine-livelock workaround: suspend+resume the game's process a few
+    /// times during startup so a stuck loading screen un-wedges itself
+    /// (see `GameNudger`).
+    public var nudgeStuckLoading: Bool
 
-    public init(launchArguments: String = "", environment: [String: String] = [:]) {
+    public init(
+        launchArguments: String = "",
+        environment: [String: String] = [:],
+        nudgeStuckLoading: Bool = false
+    ) {
         self.launchArguments = launchArguments
         self.environment = environment
+        self.nudgeStuckLoading = nudgeStuckLoading
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        launchArguments = try container.decodeIfPresent(String.self, forKey: .launchArguments) ?? ""
+        environment = try container.decodeIfPresent(
+            [String: String].self, forKey: .environment
+        ) ?? [:]
+        nudgeStuckLoading = try container.decodeIfPresent(
+            Bool.self, forKey: .nudgeStuckLoading
+        ) ?? false
     }
 
     /// Arguments split for passing to the launcher (simple whitespace split).

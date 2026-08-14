@@ -24,6 +24,7 @@ enum AppAppearance: String, CaseIterable, Identifiable {
     static let storageKey = "appearance"
 
     /// Applies the stored preference app-wide (windows, sheets, menus).
+    @MainActor
     static func applyStored() {
         let raw = UserDefaults.standard.string(forKey: storageKey) ?? ""
         NSApp.appearance = (AppAppearance(rawValue: raw) ?? .system).nsAppearance

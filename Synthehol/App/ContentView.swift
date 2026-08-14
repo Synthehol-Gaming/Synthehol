@@ -8,35 +8,31 @@ struct ContentView: View {
     var body: some View {
         @Bindable var model = model
         NavigationSplitView {
-            List(selection: $model.selectedBottleID) {
-                Section("Bottles") {
-                    if model.bottles.isEmpty {
-                        Label("No bottles yet", systemImage: "waterbottle")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(model.bottles) { bottle in
-                        Label(bottle.settings.name, systemImage: "waterbottle")
-                            .tag(bottle.id)
+            List(selection: $model.selectedGameFilter) {
+                Section("Library") {
+                    Label("All Games", systemImage: "square.grid.2x2")
+                        .tag(AppModel.GameFilter.all)
+                    ForEach(model.sidebarGenres, id: \.genre) { entry in
+                        Label(entry.genre, systemImage: "tag")
+                            .badge(entry.count)
+                            .tag(AppModel.GameFilter.genre(entry.genre))
                     }
                 }
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 220)
-            .toolbar {
-                ToolbarItem {
-                    Button("New Bottle", systemImage: "plus") {
-                        showCreateSheet = true
-                    }
-                }
-            }
         } detail: {
             if let bottle = model.selectedBottle {
-                BottleDetailView(bottle: bottle)
+                BottleDetailView(bottle: bottle, showCreateSheet: $showCreateSheet)
                     .id(bottle.id) // reset draft state when switching bottles
             } else {
                 EmptyLibraryView(showCreateSheet: $showCreateSheet)
             }
         }
         .navigationTitle("Synthehol")
+        .onChange(of: model.selectedBottleID) {
+            // Genres are per-configuration; a filter can't carry across.
+            model.selectedGameFilter = .all
+        }
         .task {
             AppAppearance.applyStored()
             await model.refresh()
@@ -63,11 +59,11 @@ struct EmptyLibraryView: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("No Bottle Selected", systemImage: "gamecontroller")
+            Label("No Configuration Selected", systemImage: "gamecontroller")
         } description: {
-            Text("Create a bottle and install Steam to build your game library.")
+            Text("Create a configuration and install Steam to build your game library.")
         } actions: {
-            Button("Create Bottle…") { showCreateSheet = true }
+            Button("Create Configuration…") { showCreateSheet = true }
         }
     }
 }

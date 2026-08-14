@@ -17,6 +17,8 @@ struct Main {
       synthehol-dev winecfg <bottle-path>  Open winecfg for a bottle
       synthehol-dev wine <bottle-path> <args...>   Run wine64 with arguments
       synthehol-dev games <bottle-path>    List installed Steam games in a bottle
+      synthehol-dev games launch <bottle-path> <appid> [--debug]   Launch a game, capturing console output
+      synthehol-dev games nudge <bottle-path> <appid>   Suspend+resume a stuck game (Wine livelock workaround)
       synthehol-dev steam install <bottle-path>   Install the Steam client into a bottle
       synthehol-dev steam launch <bottle-path>    Launch the Steam client in a bottle
     """
@@ -77,13 +79,45 @@ struct Main {
         case "steam" where args.count >= 3 && args[1] == "launch":
             let bottle = try Bottle.load(from: URL(filePath: args[2]))
             let executor = try await currentExecutor()
-            let monitor = SteamInstaller().launch(in: bottle, executor: executor)
+            let session = SteamInstaller().launch(in: bottle, executor: executor)
             print("Steam launching — sign in through the Steam window.")
             print("(watching for exit; the bottle shuts down when Steam closes)")
-            await monitor.value
+            if let log = session.logFileURL {
+                print("session log: \(log.path(percentEncoded: false))")
+            }
+            await session.task.value
+        case "games" where args.count >= 4 && args[1] == "launch":
+            let bottle = try Bottle.load(from: URL(filePath: args[2]))
+            let executor = try await currentExecutor()
+            let games = try SteamStore().installedGames(in: bottle)
+            guard let game = games.first(where: { $0.storeGameID == args[3] }) else {
+                fputs("no installed game with appid \(args[3])\n", stderr)
+                exit(1)
+            }
+            let debug = args.contains("--debug")
+            let session = SteamInstaller().launchGame(
+                game, in: bottle, executor: executor, debugLogging: debug
+            )
+            print("Launching \(game.name)\(debug ? " with verbose Wine diagnostics" : "")…")
+            if let log = session.logFileURL {
+                let path = log.path(percentEncoded: false)
+                print("console output → \(path)")
+                print("watch live with: tail -f \"\(path)\"")
+            }
+            print("(watching for exit; the bottle shuts down when Steam closes)")
+            await session.task.value
+        case "games" where args.count >= 4 && args[1] == "nudge":
+            let bottle = try Bottle.load(from: URL(filePath: args[2]))
+            let games = try SteamStore().installedGames(in: bottle)
+            guard let game = games.first(where: { $0.storeGameID == args[3] }) else {
+                fputs("no installed game with appid \(args[3])\n", stderr)
+                exit(1)
+            }
+            let nudged = await GameNudger.nudgeNow(game) { print($0) }
+            if nudged == 0 { print("\(game.name) doesn't seem to be running.") }
         case "backend" where args.count >= 3:
             guard let backend = GraphicsBackend(rawValue: args[2]) else {
-                fputs("unknown backend \(args[2]) — use dxmt or dxvk\n", stderr)
+                fputs("unknown backend \(args[2]) — use dxmt, dxvk, or d3dmetal\n", stderr)
                 exit(1)
             }
             let bottle = try Bottle.load(from: URL(filePath: args[1]))
@@ -92,6 +126,7 @@ struct Main {
             var updated = bottle
             updated.settings.graphicsBackend = backend
             try updated.saveSettings()
+            try await executor.applyRegistrySettings(for: updated)
             print("Deployed \(backend.rawValue) into \(bottle.settings.name)")
         case "launcher" where args.count >= 3:
             let bottle = try Bottle.load(from: URL(filePath: args[1]))

@@ -5,12 +5,16 @@ struct CreateBottleSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
-    @State private var name = ""
+    @State private var name = Self.defaultName(for: .win10)
     @State private var windowsVersion: WindowsVersion = .win10
+
+    private static func defaultName(for version: WindowsVersion) -> String {
+        "Steam on \(version.shortName)"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("New Bottle")
+            Text("New Configuration")
                 .font(.title2.bold())
 
             if model.runtime == nil {
@@ -18,7 +22,7 @@ struct CreateBottleSheet: View {
             }
 
             Form {
-                TextField("Name", text: $name, prompt: Text("e.g. Steam"))
+                TextField("Name", text: $name, prompt: Text("e.g. Steam on Win11"))
                 Picker("Windows Version", selection: $windowsVersion) {
                     ForEach(WindowsVersion.allCases, id: \.self) {
                         Text($0.displayName).tag($0)
@@ -26,6 +30,13 @@ struct CreateBottleSheet: View {
                 }
             }
             .formStyle(.grouped)
+            // The generated name tracks the version picker until the user
+            // types their own.
+            .onChange(of: windowsVersion) { old, new in
+                if name == Self.defaultName(for: old) {
+                    name = Self.defaultName(for: new)
+                }
+            }
 
             HStack {
                 Spacer()
@@ -52,9 +63,9 @@ struct RuntimeInstallPrompt: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Wine runtime required", systemImage: "exclamationmark.triangle")
+            Label("Runtime required", systemImage: "exclamationmark.triangle")
                 .font(.headline)
-            Text("Synthehol needs to download the Wine runtime (~330 MB) before it can create bottles.")
+            Text("Synthehol needs to download its Windows-compatibility runtime (~330 MB) before it can create configurations.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 

@@ -27,6 +27,25 @@ public struct SteamInstaller: Sendable {
     /// remotely updatable) when Steam client updates break Wine again.
     public static let defaultLaunchArguments: [String] = []
 
+    /// Environment overrides for debug launches. The base environment sets
+    /// `WINEDEBUG=fixme-all`; this replaces it with Wine's default channels
+    /// (err + fixme) plus timestamp/pid/tid prefixes on every line — so a
+    /// freeze shows *when* and *where* output stopped — and seh (Windows
+    /// exceptions) and loaddll (module loads). GST_DEBUG=3 surfaces GStreamer
+    /// media errors, a common hang source in cutscenes/intro videos.
+    public static let debugEnvironment: [String: String] = [
+        "WINEDEBUG": "+timestamp,+pid,+tid,+seh,+loaddll",
+        "GST_DEBUG": "3"
+    ]
+
+    /// A running Steam/game session: the monitor task (completes after the
+    /// process exits and the bottle shuts down) and the session log file that
+    /// captures all console output (Wine, Steam, and the game).
+    public struct LaunchSession: Sendable {
+        public let task: Task<Void, Never>
+        public let logFileURL: URL?
+    }
+
     private let store = SteamStore()
 
     public init() {}
@@ -79,28 +98,60 @@ public struct SteamInstaller: Sendable {
         in bottle: Bottle,
         executor: WineExecutor,
         arguments: [String] = SteamInstaller.defaultLaunchArguments,
-        extraEnvironment: [String: String] = [:]
-    ) -> Task<Void, Never> {
+        extraEnvironment: [String: String] = [:],
+        debugLogging: Bool = false,
+        nudgeStuckLoadingFor nudgeGame: InstalledGame? = nil
+    ) -> LaunchSession {
+        var environment = extraEnvironment
+        if debugLogging {
+            environment.merge(Self.debugEnvironment) { _, debug in debug }
+        }
         let steamExe = store.steamExecutable(in: bottle)
         let stream = executor.runProgram(
             at: steamExe, arguments: arguments, bottle: bottle, waitForExit: true,
-            extraEnvironment: extraEnvironment
+            extraEnvironment: environment
         )
-        return Task.detached(priority: .utility) {
-            let sessionLog = WineLogWriter(
-                label: "steam \(bottle.settings.name)",
-                header: [
-                    ("Bottle", bottle.url.path(percentEncoded: false)),
-                    ("Runtime", executor.runtime.version),
-                    ("Arguments", arguments.joined(separator: " "))
-                ]
-            )
-            defer { sessionLog?.close() }
+        let sessionLog = WineLogWriter(
+            label: "steam \(bottle.settings.name)",
+            header: [
+                ("Bottle", bottle.url.path(percentEncoded: false)),
+                ("Runtime", executor.runtime.version),
+                ("Arguments", arguments.joined(separator: " "))
+            ] + (debugLogging
+                ? [("Debug", "WINEDEBUG=\(Self.debugEnvironment["WINEDEBUG"] ?? "")")]
+                : [])
+        )
+        let nudger = nudgeGame.map { game in
+            GameNudger.startMonitor(for: game) { [sessionLog] event in
+                Log.steam.info("\(event, privacy: .public)")
+                sessionLog?.append("[nudge] \(event)")
+            }
+        }
+        let task = Task.detached(priority: .utility) {
+            defer {
+                nudger?.cancel()
+                sessionLog?.close()
+            }
+            var networkHintGiven = false
             do {
                 for try await event in stream {
                     switch event {
                     case .stdout(let text), .stderr(let text):
                         sessionLog?.append(text)
+                        // "No internet" in Steam under Wine is almost always
+                        // macOS-side (Whisky #787) — flag it once with the
+                        // known causes so the log diagnoses itself.
+                        if !networkHintGiven,
+                           text.contains("Failed to resolve your host name") {
+                            networkHintGiven = true
+                            sessionLog?.append("""
+                            [hint] Steam can't resolve the local hostname. Usual causes: \
+                            macOS Local Network permission denied for Synthehol \
+                            (System Settings > Privacy & Security > Local Network), \
+                            IPv6 misbehaving (set the network service's IPv6 to Link-Local Only), \
+                            or a firewall like Little Snitch blocking wine processes.
+                            """)
+                        }
                     case .launched(let pid):
                         sessionLog?.append("[launched pid \(pid)]")
                     case .terminated(let code):
@@ -116,8 +167,8 @@ public struct SteamInstaller: Sendable {
             // a grace window to reappear before declaring Steam closed.
             for _ in 0..<3 {
                 try? await Task.sleep(for: .seconds(3))
-                if await executor.isProcessRunning(imageName: "steam.exe", bottle: bottle) {
-                    while await executor.isProcessRunning(imageName: "steam.exe", bottle: bottle) {
+                if await isRunning(in: bottle) {
+                    while await isRunning(in: bottle) {
                         try? await Task.sleep(for: .seconds(5))
                     }
                     break
@@ -126,6 +177,7 @@ public struct SteamInstaller: Sendable {
             Log.steam.info("Steam exited; shutting down bottle \(bottle.settings.name, privacy: .public)")
             try? await executor.killBottle(bottle)
         }
+        return LaunchSession(task: task, logFileURL: sessionLog?.fileURL)
     }
 
     /// Launches an installed game via Steam (`steam.exe -applaunch <appid>`),
@@ -136,14 +188,17 @@ public struct SteamInstaller: Sendable {
     public func launchGame(
         _ game: InstalledGame,
         in bottle: Bottle,
-        executor: WineExecutor
-    ) -> Task<Void, Never> {
+        executor: WineExecutor,
+        debugLogging: Bool = false
+    ) -> LaunchSession {
         let settings = GameSettings.load(for: game, in: bottle)
         return launch(
             in: bottle,
             executor: executor,
             arguments: ["-applaunch", game.storeGameID] + settings.launchArgumentList,
-            extraEnvironment: settings.environment
+            extraEnvironment: settings.environment,
+            debugLogging: debugLogging,
+            nudgeStuckLoadingFor: settings.nudgeStuckLoading ? game : nil
         )
     }
 
@@ -155,7 +210,7 @@ public struct SteamInstaller: Sendable {
         appID: String,
         in bottle: Bottle,
         executor: WineExecutor
-    ) -> Task<Void, Never> {
+    ) -> LaunchSession {
         launch(
             in: bottle,
             executor: executor,
@@ -172,7 +227,7 @@ public struct SteamInstaller: Sendable {
         of game: InstalledGame,
         in bottle: Bottle,
         executor: WineExecutor
-    ) -> Task<Void, Never> {
+    ) -> LaunchSession {
         launch(
             in: bottle,
             executor: executor,
@@ -191,15 +246,60 @@ public struct SteamInstaller: Sendable {
         )
     }
 
-    /// Whether a Steam client process appears to be running for this bottle
-    /// (best-effort: matches wine processes whose command line mentions the
-    /// bottle's steam.exe).
+    /// Whether this bottle's Steam client is running. Wine processes report
+    /// Windows-style argv (`C:\…\steam.exe`) with no bottle path, so pgrep
+    /// alone can't pin a process to a bottle; instead, take pgrep's steam.exe
+    /// candidates and check whether any holds files open under the bottle
+    /// (the client always keeps its PE and prefix files open). Much cheaper
+    /// than `wine tasklist`, which boots a whole Wine process per check
+    /// (Whisky #917: app CPU churn while a game runs).
     public func isRunning(in bottle: Bottle) async -> Bool {
-        let result = try? await ProcessRunner.run(
-            executable: URL(filePath: "/usr/bin/pgrep"),
-            arguments: ["-if", "steam.exe"]
+        // Wine's `start.exe /wait /unix …steam.exe` wrapper matches the
+        // steam.exe pattern too and can outlive the client, so exclude it —
+        // otherwise a dead session still reads as running.
+        let candidates = Set(await Self.processIDs(matching: "steam\\.exe"))
+            .subtracting(await Self.processIDs(matching: "start\\.exe"))
+        guard !candidates.isEmpty else { return false }
+        // lsof exits nonzero if any pid died between the calls but still
+        // reports the rest, so don't gate on its exit code.
+        let lsof = try? await ProcessRunner.run(
+            executable: URL(filePath: "/usr/sbin/lsof"),
+            arguments: ["-nP", "-Fn", "-p", candidates.sorted().joined(separator: ",")]
         )
-        guard let result, result.exitCode == 0 else { return false }
-        return !result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return lsof?.standardOutput.contains(bottle.url.canonicalPath) ?? false
+    }
+
+    private static func processIDs(matching pattern: String) async -> [String] {
+        guard let result = try? await ProcessRunner.run(
+            executable: URL(filePath: "/usr/bin/pgrep"),
+            arguments: ["-f", pattern]
+        ), result.exitCode == 0 else { return [] }
+        return result.standardOutput.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Re-attaches to a Steam session that outlived the app (launched by a
+    /// previous run, then the app quit — Whisky #680: orphaned clients never
+    /// shut their bottle down). Waits for the client to exit, with the same
+    /// self-update grace window as `launch`, then stops the bottle.
+    public func adoptSession(in bottle: Bottle, executor: WineExecutor) -> Task<Void, Never> {
+        Task.detached(priority: .utility) {
+            while !Task.isCancelled {
+                if await isRunning(in: bottle) {
+                    try? await Task.sleep(for: .seconds(5))
+                    continue
+                }
+                var restarted = false
+                for _ in 0..<3 {
+                    try? await Task.sleep(for: .seconds(3))
+                    if await isRunning(in: bottle) { restarted = true; break }
+                }
+                if restarted { continue }
+                Log.steam.info("Adopted Steam session ended; shutting down bottle \(bottle.settings.name, privacy: .public)")
+                try? await executor.killBottle(bottle)
+                return
+            }
+        }
     }
 }

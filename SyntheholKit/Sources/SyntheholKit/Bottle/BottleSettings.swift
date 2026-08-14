@@ -10,6 +10,14 @@ public enum WindowsVersion: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// Compact form for generated configuration names ("Steam on Win11").
+    public var shortName: String {
+        switch self {
+        case .win10: "Win10"
+        case .win11: "Win11"
+        }
+    }
+
     /// Build number written to the registry alongside `winecfg -v` so version
     /// checks that read CurrentBuild(Number) see a consistent Windows.
     public var buildNumber: String {
@@ -26,7 +34,9 @@ public enum EnhancedSync: String, Codable, CaseIterable, Sendable {
 
 /// Graphics translation backend used for a bottle (per-game overridable later).
 public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
-    case dxmt, d3dMetal, dxvk
+    case dxmt
+    case d3dMetal = "d3dmetal"
+    case dxvk
 }
 
 /// Per-bottle configuration, persisted as `Metadata.plist` in the bottle directory.
@@ -122,7 +132,11 @@ extension BottleSettings {
             env["WINEMSYNC"] = "1"
             env["WINEESYNC"] = "1"
         }
-        if avxEnabled { env["ROSETTA_ADVERTISE_AVX"] = "1" }
+        // D3DMetal itself uses AVX and fails device creation without it
+        // advertised (Apple's own GPTK launcher always sets this).
+        if avxEnabled || graphicsBackend == .d3dMetal {
+            env["ROSETTA_ADVERTISE_AVX"] = "1"
+        }
         if metalHUD { env["MTL_HUD_ENABLED"] = "1" }
         if let overrides = GraphicsBackendDeployer.dllOverrides(for: graphicsBackend) {
             env["WINEDLLOVERRIDES"] = overrides

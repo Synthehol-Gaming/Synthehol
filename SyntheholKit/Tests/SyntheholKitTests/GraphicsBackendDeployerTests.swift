@@ -81,8 +81,8 @@ struct GraphicsBackendDeployerTests {
         #expect(contents(fx.system32.appending(path: "dxgi.dll")) == "builtin-dxgi.dll")
         #expect(contents(fx.system32.appending(path: "d3d10core.dll")) == "DXVK-x64-d3d10core.dll")
 
-        // Reverting to a no-deploy backend restores everything replaced.
-        try GraphicsBackendDeployer.apply(.d3dMetal, runtime: fx.runtime, bottle: fx.bottle)
+        // Reverting restores everything replaced.
+        try GraphicsBackendDeployer.restoreOriginals(in: fx.bottle)
         #expect(contents(fx.system32.appending(path: "d3d11.dll")) == "builtin-d3d11.dll")
         #expect(contents(fx.system32.appending(path: "dxgi.dll")) == "builtin-dxgi.dll")
     }
@@ -102,5 +102,7 @@ struct GraphicsBackendDeployerTests {
         let env = settings.wineEnvironment()
         #expect(env["WINEDLLOVERRIDES"] == "d3d10core,d3d11=n,b")
         #expect(env["DXVK_ASYNC"] == "1")
+        settings.graphicsBackend = .d3dMetal
+        #expect(settings.wineEnvironment()["WINEDLLOVERRIDES"] == nil)
     }
 }

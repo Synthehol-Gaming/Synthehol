@@ -84,13 +84,6 @@ public struct WineExecutor: Sendable {
         )
     }
 
-    /// Whether any process with this image name (e.g. `steam.exe`) is running
-    /// in the bottle, per Wine's tasklist.
-    public func isProcessRunning(imageName: String, bottle: Bottle) async -> Bool {
-        let result = try? await runWine(["tasklist"], bottle: bottle)
-        return result?.standardOutput.localizedCaseInsensitiveContains(imageName) ?? false
-    }
-
     /// `wine --version`, e.g. `wine-11.0`.
     public func wineVersion() async throws -> String {
         let result = try await ProcessRunner.run(
@@ -129,6 +122,11 @@ public struct WineExecutor: Sendable {
         )
     }
 
+    /// Deletes a registry key tree; missing keys are not an error.
+    public func deleteRegistryKey(_ key: String, bottle: Bottle) async {
+        _ = try? await runWine(["reg", "delete", key, "-f"], bottle: bottle)
+    }
+
     /// Changes the prefix's Windows version and keeps the registry build number
     /// consistent with it.
     public func changeWindowsVersion(_ version: WindowsVersion, bottle: Bottle) async throws {
@@ -152,7 +150,7 @@ public struct WineExecutor: Sendable {
 
         public var displayName: String {
             switch self {
-            case .winecfg: "Wine Configuration"
+            case .winecfg: "Wine Settings"
             case .controlPanel: "Control Panel"
             case .regedit: "Registry Editor"
             case .taskManager: "Task Manager"
@@ -196,5 +194,28 @@ public struct WineExecutor: Sendable {
             type: .string,
             bottle: bottle
         )
+        // D3DMetal bottles: games use Apple's native bridge DLLs, but Steam's
+        // client can't render through them — the
+        // deployer puts DXVK copies in Steam's directories, and these
+        // per-app overrides make Steam's processes prefer them (app-local
+        // native beats system32). Other backends clear the overrides.
+        let steamExes = ["steam.exe", "steamwebhelper.exe"]
+        if bottle.settings.graphicsBackend == .d3dMetal {
+            for exe in steamExes {
+                for dll in ["d3d9", "d3d10core", "d3d11", "dxgi"] {
+                    try await addRegistryKey(
+                        #"HKCU\Software\Wine\AppDefaults\"# + exe + #"\DllOverrides"#,
+                        name: dll, data: "native,builtin", type: .string, bottle: bottle
+                    )
+                }
+            }
+        } else {
+            for exe in steamExes {
+                await deleteRegistryKey(
+                    #"HKCU\Software\Wine\AppDefaults\"# + exe + #"\DllOverrides"#,
+                    bottle: bottle
+                )
+            }
+        }
     }
 }

@@ -36,6 +36,10 @@ targets:
         NSPrincipalClass: NSApplication
         NSMicrophoneUsageDescription: A Windows application is trying to access the microphone.
         NSCameraUsageDescription: A Windows application is trying to access the camera.
+        # Steam and games talk to LAN peers (Remote Play, discovery). Without
+        # this key macOS can silently deny local networking for Wine children
+        # (Whisky #787: "Steam has no internet connection").
+        NSLocalNetworkUsageDescription: Windows games and Steam use the local network for discovery and Remote Play.
         CFBundleURLTypes:
           - CFBundleURLName: com.colinobrien.Synthehol.launch
             CFBundleURLSchemes: [synthehol]

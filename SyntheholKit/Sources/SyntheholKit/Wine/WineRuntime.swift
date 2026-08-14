@@ -41,4 +41,14 @@ extension RuntimeManifest {
         sha256: "01f3a1b43b98065fe20c529c1023b61dd79a6d2ad93bba6040865f646481ccf3",
         notes: "Wine 11.0, DXVK 1.10.3, DXMT 0.80 (frankea/Whisky Wine Libraries v3.1.1)"
     )
+
+    /// Beta channel: CrossOver-lineage build (winecx-gptk) that can host
+    /// D3DMetal from a user-imported GPTK. SHA-256 computed and pinned from
+    /// the published asset on 2026-08-14 (release notes publish no checksum).
+    public static let gptkBeta = RuntimeManifest(
+        version: "4.0.0-beta.2",
+        url: URL(string: "https://github.com/frankea/Whisky/releases/download/v4.0.0-beta.2/Libraries.tar.gz")!,
+        sha256: "492b1304172de5d51f8026398a90255ecb99a4fd0409df0bc674fdaad642c2b3",
+        notes: "GPTK-capable beta (CrossOver 25 lineage); hosts D3DMetal from a user-imported Game Porting Toolkit"
+    )
 }

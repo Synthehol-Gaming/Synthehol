@@ -30,6 +30,13 @@ public enum SyntheholPaths {
     /// Cached game artwork (posters, headers).
     public static var artwork: URL { applicationSupport.appending(path: "Artwork") }
 
+    /// Cached store metadata (genres, categories) per appid.
+    public static var metadata: URL { applicationSupport.appending(path: "Metadata") }
+
+    /// The user's imported Game Porting Toolkit libraries (never bundled —
+    /// Apple's GPTK license doesn't allow redistribution).
+    public static var gptk: URL { applicationSupport.appending(path: "GPTK") }
+
     /// The bottle registry: a plist listing the paths of all known bottles.
     public static var bottleRegistry: URL { applicationSupport.appending(path: "Bottles.plist") }
 
