@@ -59,8 +59,17 @@ struct BottleDetailView: View {
                 .labelsHidden()
             }
             if bottle.settings.steamInstalled {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
                     if model.steamRunning.contains(bottle.id) {
+                        Button(
+                            model.steamClientVisible.contains(bottle.id)
+                                ? "Hide Steam" : "Show Steam",
+                            systemImage: model.steamClientVisible.contains(bottle.id)
+                                ? "eye.slash" : "eye"
+                        ) {
+                            model.toggleSteamClient(in: bottle)
+                        }
+                        .help("Show or hide the Steam client without affecting running games.")
                         Button("Quit Steam", systemImage: "stop.fill") {
                             Task { await model.quitSteam(in: bottle) }
                         }

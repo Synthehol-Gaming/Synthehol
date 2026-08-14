@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import Observation
 import os
@@ -24,6 +25,32 @@ final class AppModel {
     var steamProgress: [Bottle.ID: SteamInstaller.Progress] = [:]
     var installedGames: [Bottle.ID: [InstalledGame]] = [:]
     var steamRunning: Set<Bottle.ID> = []
+    /// Visibility of Steam's own Wine process. Game windows use separate
+    /// processes and remain visible when the client is hidden.
+    var steamClientVisible: Set<Bottle.ID> = []
+    private var steamClientPIDs: [Bottle.ID: pid_t] = [:]
+    private var steamClientRequestedVisible: Set<Bottle.ID> = []
+
+    private func persistedSteamClientPID(for bottle: Bottle) -> pid_t? {
+        let value = UserDefaults.standard.integer(
+            forKey: "steamClientPID.\(bottle.id)"
+        )
+        return value > 0 ? pid_t(value) : nil
+    }
+
+    private func rememberSteamClientPID(_ pid: pid_t, for bottle: Bottle) {
+        steamClientPIDs[bottle.id] = pid
+        UserDefaults.standard.set(
+            Int(pid), forKey: "steamClientPID.\(bottle.id)"
+        )
+    }
+
+    private func forgetSteamClientPID(for bottle: Bottle) {
+        steamClientPIDs.removeValue(forKey: bottle.id)
+        UserDefaults.standard.removeObject(
+            forKey: "steamClientPID.\(bottle.id)"
+        )
+    }
     var ownedGames: [Bottle.ID: [InstalledGame]] = [:]
     var ownedGamesError: [Bottle.ID: String] = [:]
     var loadingOwnedGames: Set<Bottle.ID> = []
@@ -129,6 +156,7 @@ final class AppModel {
                 continue
             }
             steamRunning.insert(bottle.id)
+            hideSteamClientSoon(in: bottle)
             refreshGames(in: bottle)
             // Restore "Running" badges for games that survived the relaunch.
             for game in installedGames[bottle.id] ?? [] where gameRunStates[game.id] == nil {
@@ -400,12 +428,14 @@ final class AppModel {
     func launchSteam(in bottle: Bottle) {
         guard let executor else { return }
         steamRunning.insert(bottle.id)
-        activateNewWineWindows()
-        activateExistingWineWindowsSoon()
+        steamClientVisible.remove(bottle.id)
+        steamClientRequestedVisible.remove(bottle.id)
+        watchNewWineWindows(hidingSteamIn: bottle)
         let session = SteamInstaller().launch(in: bottle, executor: executor)
         Task { [weak self] in
             await session.task.value
             self?.steamRunning.remove(bottle.id)
+            self?.forgetSteamClientPID(for: bottle)
             self?.refreshGames(in: bottle)
         }
     }
@@ -420,7 +450,7 @@ final class AppModel {
         gameRunStates[game.id] = .starting
         watchGame(game)
         steamRunning.insert(bottle.id)
-        activateNewWineWindows()
+        watchNewWineWindows(hidingSteamIn: bottle)
         let session = SteamInstaller().launchGame(
             game, in: bottle, executor: executor, debugLogging: debugLogging
         )
@@ -551,7 +581,7 @@ final class AppModel {
     func installOwnedGame(_ game: InstalledGame, in bottle: Bottle) {
         guard let executor else { return }
         steamRunning.insert(bottle.id)
-        activateNewWineWindows()
+        watchNewWineWindows(hidingSteamIn: bottle)
         activateExistingWineWindowsSoon()
         let session = SteamInstaller().requestInstall(
             appID: game.storeGameID, in: bottle, executor: executor
@@ -568,7 +598,7 @@ final class AppModel {
     func uninstallGame(_ game: InstalledGame, in bottle: Bottle) {
         guard let executor else { return }
         steamRunning.insert(bottle.id)
-        activateNewWineWindows()
+        watchNewWineWindows(hidingSteamIn: bottle)
         activateExistingWineWindowsSoon()
         let session = SteamInstaller().requestUninstall(of: game, in: bottle, executor: executor)
         Task { [weak self] in
@@ -613,10 +643,14 @@ final class AppModel {
     /// hand the owning app activation. Window-based (not process-based) so
     /// dialogs opened by an already-running Steam count too — e.g. the
     /// steam://uninstall confirmation.
-    private func activateNewWineWindows(deadline: TimeInterval = 90) {
-        func wineWindows() -> [(id: UInt32, pid: pid_t)] {
+    private func watchNewWineWindows(
+        hidingSteamIn bottle: Bottle? = nil, deadline: TimeInterval = 90
+    ) {
+        func wineWindows(options: CGWindowListOption = [
+            .optionOnScreenOnly, .excludeDesktopElements
+        ]) -> [(id: UInt32, pid: pid_t, title: String)] {
             let info = CGWindowListCopyWindowInfo(
-                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+                options, kCGNullWindowID
             ) as? [[String: Any]] ?? []
             return info.compactMap { window in
                 guard let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
@@ -625,7 +659,8 @@ final class AppModel {
                       let id = window[kCGWindowNumber as String] as? Int,
                       let pid = window[kCGWindowOwnerPID as String] as? Int
                 else { return nil }
-                return (UInt32(id), pid_t(pid))
+                let title = window[kCGWindowName as String] as? String ?? ""
+                return (UInt32(id), pid_t(pid), title)
             }
         }
 
@@ -635,7 +670,26 @@ final class AppModel {
             let start = Date()
             while Date().timeIntervalSince(start) < deadline {
                 try? await Task.sleep(for: .seconds(1))
-                for window in wineWindows() where !seen.contains(window.id) {
+                for window in wineWindows() {
+                    if let bottle,
+                       Self.isSteamWindowTitle(window.title)
+                        || Self.isSteamClientProcess(window.pid) {
+                        rememberSteamClientPID(window.pid, for: bottle)
+                        if steamClientRequestedVisible.contains(bottle.id) {
+                            guard !steamClientVisible.contains(bottle.id) else { continue }
+                            if let app = NSRunningApplication(processIdentifier: window.pid) {
+                                app.unhide()
+                                NSApp.yieldActivation(to: app)
+                                app.activate()
+                                steamClientVisible.insert(bottle.id)
+                            }
+                        } else {
+                            steamClientVisible.remove(bottle.id)
+                            NSRunningApplication(processIdentifier: window.pid)?.hide()
+                        }
+                        continue
+                    }
+                    guard !seen.contains(window.id) else { continue }
                     seen.insert(window.id)
                     // Per-app cooldown so multi-window boots don't churn focus.
                     if let last = lastActivation[window.pid],
@@ -645,6 +699,101 @@ final class AppModel {
                     NSApp.yieldActivation(to: app)
                     app.activate()
                     lastActivation[window.pid] = Date()
+                }
+            }
+        }
+    }
+
+    private static func isSteamWindowTitle(_ title: String) -> Bool {
+        let value = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return value == "steam" || value.hasPrefix("steam - ")
+    }
+
+    /// Window titles are blank unless the user grants Screen Recording access.
+    /// Wine exposes the Windows executable as its process name, so this remains
+    /// reliable without adding a privacy permission just to hide Steam.
+    private static func isSteamClientProcess(_ pid: pid_t) -> Bool {
+        var buffer = [CChar](repeating: 0, count: 4_096)
+        let length = proc_name(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return false }
+        let name = String(decoding: buffer.prefix(Int(length)).map(UInt8.init(bitPattern:)), as: UTF8.self)
+            .lowercased()
+        return name.hasSuffix("steamwebhelper.exe")
+    }
+
+    /// Hides an adopted/already-running Steam window. Uses the Window Server
+    /// owner PID so only Steam's Wine process is hidden; game windows belong
+    /// to different Wine processes.
+    private func hideSteamClientSoon(in bottle: Bottle) {
+        Task { @MainActor in
+            for _ in 0..<20 {
+                guard !steamClientRequestedVisible.contains(bottle.id) else { return }
+                if setSteamClientVisible(false, in: bottle) { return }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    /// Toggles Steam without affecting games. Returns false internally when
+    /// Steam has not created its window yet, allowing the startup poll to retry.
+    @discardableResult
+    private func setSteamClientVisible(_ visible: Bool, in bottle: Bottle) -> Bool {
+        var pid = steamClientPIDs[bottle.id] ?? persistedSteamClientPID(for: bottle)
+        if let cached = pid,
+           NSRunningApplication(processIdentifier: cached) == nil
+            || !Self.isSteamClientProcess(cached) {
+            forgetSteamClientPID(for: bottle)
+            pid = nil
+        }
+        if pid == nil {
+            let info = CGWindowListCopyWindowInfo(
+                [.optionAll, .excludeDesktopElements], kCGNullWindowID
+            ) as? [[String: Any]] ?? []
+            pid = info.first { window in
+                let title = window[kCGWindowName as String] as? String ?? ""
+                guard let rawPID = window[kCGWindowOwnerPID as String] as? Int else {
+                    return false
+                }
+                return Self.isSteamWindowTitle(title)
+                    || Self.isSteamClientProcess(pid_t(rawPID))
+            }.flatMap { ($0[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) }
+        }
+        guard let pid, let app = NSRunningApplication(processIdentifier: pid) else {
+            return false
+        }
+        rememberSteamClientPID(pid, for: bottle)
+        if visible {
+            app.unhide()
+            NSApp.yieldActivation(to: app)
+            app.activate()
+            steamClientVisible.insert(bottle.id)
+        } else {
+            app.hide()
+            steamClientVisible.remove(bottle.id)
+        }
+        return true
+    }
+
+    func toggleSteamClient(in bottle: Bottle) {
+        let show = !steamClientVisible.contains(bottle.id)
+        if show {
+            steamClientRequestedVisible.insert(bottle.id)
+        } else {
+            steamClientRequestedVisible.remove(bottle.id)
+        }
+        if !setSteamClientVisible(show, in: bottle), show {
+            // Ask an existing Steam process to surface its main window, then
+            // capture and show the Wine process that owns it.
+            guard let executor else { return }
+            let stream = executor.runProgram(
+                at: SteamStore().steamExecutable(in: bottle),
+                arguments: ["steam://open/main"], bottle: bottle
+            )
+            Task.detached(priority: .utility) { for try await _ in stream {} }
+            Task { @MainActor in
+                for _ in 0..<20 {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    if setSteamClientVisible(true, in: bottle) { return }
                 }
             }
         }
