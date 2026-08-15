@@ -14,11 +14,24 @@ private let gameStateLog = Logger(
 @MainActor
 @Observable
 final class AppModel {
+    private static let selectedBottleDefaultsKey = "selectedBottleID"
+
     let bottleStore = BottleStore()
     let runtimeStore = RuntimeStore()
 
     var bottles: [Bottle] = []
-    var selectedBottleID: Bottle.ID?
+    var selectedBottleID: Bottle.ID? {
+        didSet {
+            guard selectedBottleID != oldValue else { return }
+            if let selectedBottleID {
+                UserDefaults.standard.set(
+                    selectedBottleID, forKey: Self.selectedBottleDefaultsKey
+                )
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.selectedBottleDefaultsKey)
+            }
+        }
+    }
     var runtime: WineRuntime?
     var runtimeProgress: RuntimeInstallProgress?
     var busyBottleIDs: Set<Bottle.ID> = []
@@ -104,7 +117,17 @@ final class AppModel {
     func refresh() async {
         runtime = await runtimeStore.current()
         bottles = await bottleStore.bottles()
-        if selectedBottleID == nil { selectedBottleID = bottles.first?.id }
+        let availableIDs = Set(bottles.map(\.id))
+        if let selectedBottleID, availableIDs.contains(selectedBottleID) {
+            // Preserve an in-session choice across refreshes.
+        } else if let persisted = UserDefaults.standard.string(
+            forKey: Self.selectedBottleDefaultsKey
+        ), availableIDs.contains(persisted) {
+            selectedBottleID = persisted
+        } else {
+            // The saved configuration may have been deleted outside the app.
+            selectedBottleID = bottles.first?.id
+        }
         WineLogWriter.deleteOldLogs()
         await repairIncompleteD3DMetalDeployments()
         await adoptRunningSessions()
