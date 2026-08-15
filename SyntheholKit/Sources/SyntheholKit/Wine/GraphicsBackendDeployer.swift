@@ -8,7 +8,7 @@ import Foundation
 /// deleted originals with no backup, permanently breaking prefixes).
 public enum GraphicsBackendDeployer {
     static let backupSuffix = "synthehol-orig"
-    static let d3dMetalDeploymentMarker = ".synthehol-d3dmetal-v3"
+    static let d3dMetalDeploymentMarker = ".synthehol-d3dmetal-v8"
 
     /// Applies a backend to the bottle's prefix: restores any previously
     /// replaced DLLs, then copies the new backend's DLLs in (x64 → system32,
@@ -22,7 +22,7 @@ public enum GraphicsBackendDeployer {
             case .gptkNotImported:
                 "D3DMetal needs Apple's Game Porting Toolkit imported first (Settings → Graphics → Import Game Porting Toolkit)."
             case .runtimeNotGPTKCapable(let version):
-                "D3DMetal needs the GPTK-capable beta runtime; the current runtime (\(version)) can't host it."
+                "D3DMetal needs the Wine 11.15 GPTK runtime; the installed runtime (\(version)) can't host it."
             }
         }
     }
@@ -56,6 +56,7 @@ public enum GraphicsBackendDeployer {
                 )
             )
             try ensureCrossOverUserSymlink(in: bottle)
+            try removeLegacySteamDXVK(runtime: runtime, bottle: bottle)
             try scopeSteamToDXVK(runtime: runtime, bottle: bottle)
             try Data().write(
                 to: bottle.url.appending(path: d3dMetalDeploymentMarker),
@@ -80,7 +81,7 @@ public enum GraphicsBackendDeployer {
         case .dxmt: "d3d10core,d3d11,dxgi=n,b"
         case .dxvk: "d3d10core,d3d11=n,b"
         // Apple's bridge is installed as Wine's builtin implementation.
-        // Steam is separately scoped to app-local DXVK DLLs via AppDefaults.
+        // Steam is separately scoped to app-local DXVK.
         case .d3dMetal: nil
         }
     }
@@ -139,22 +140,6 @@ public enum GraphicsBackendDeployer {
         }
     }
 
-    /// Steam's own UI cannot render through the GPTK shims or this runtime's
-    /// builtin wined3d (both black-screen); per the runtime's release notes,
-    /// Steam works in a D3DMetal bottle "when Steam's executables are scoped
-    /// to DXVK". Windows loads app-local DLLs before system32, so DXVK
-    /// copies in Steam's directories win for the client while games still
-    /// get the GPTK shims from system32.
-    static func scopeSteamToDXVK(runtime: WineRuntime, bottle: Bottle) throws {
-        let steamDir = SteamStore().steamDirectory(in: bottle)
-        // steam.exe is 32-bit; steamwebhelper.exe (the renderer) is 64-bit.
-        try deploy(from: runtime.dxvkDirectory.appending(path: "x32"), into: steamDir)
-        try deploy(
-            from: runtime.dxvkDirectory.appending(path: "x64"),
-            into: steamDir.appending(path: "bin/cef/cef.win64")
-        )
-    }
-
     /// CrossOver-lineage runtimes look for the Windows user profile under
     /// `users/crossover`; stock prefixes use `users/<name>`. A symlink keeps
     /// one prefix working under both.
@@ -175,6 +160,52 @@ public enum GraphicsBackendDeployer {
         // Relative target so the bottle stays relocatable.
         try fm.createSymbolicLink(
             atPath: linkPath, withDestinationPath: profile.lastPathComponent
+        )
+    }
+
+    /// Older D3DMetal deployments copied DXVK into Steam. Repeated repairs
+    /// could then back up that copy as though it were Steam's original, so a
+    /// normal restore is insufficient. Remove only byte-identical runtime
+    /// DXVK files; genuine Steam/user DLLs are left untouched.
+    static func removeLegacySteamDXVK(runtime: WineRuntime, bottle: Bottle) throws {
+        let pairs = [
+            (
+                runtime.dxvkDirectory.appending(path: "x32"),
+                SteamStore().steamDirectory(in: bottle)
+            ),
+            (
+                runtime.dxvkDirectory.appending(path: "x64"),
+                SteamStore().steamDirectory(in: bottle)
+                    .appending(path: "bin/cef/cef.win64")
+            )
+        ]
+        let fm = FileManager.default
+        for (sourceDirectory, targetDirectory) in pairs {
+            guard let sources = try? fm.contentsOfDirectory(
+                at: sourceDirectory, includingPropertiesForKeys: nil
+            ) else { continue }
+            for source in sources where source.pathExtension.lowercased() == "dll" {
+                let target = targetDirectory.appending(path: source.lastPathComponent)
+                guard let sourceData = fm.contents(atPath: source.path(percentEncoded: false)),
+                      let targetData = fm.contents(atPath: target.path(percentEncoded: false)),
+                      sourceData == targetData
+                else { continue }
+                try fm.removeItem(at: target)
+            }
+        }
+    }
+
+    /// Steam's CEF UI cannot render through D3DMetal or DXMT on this Wine
+    /// runtime. Wine 11.15's cross-process Metal-layer fixes support the
+    /// Vulkan/DXVK path, so put DXVK's D3D11 pair beside Steam and its 64-bit
+    /// web helper. Games elsewhere continue to use D3DMetal's builtins.
+    static func scopeSteamToDXVK(runtime: WineRuntime, bottle: Bottle) throws {
+        let steamDirectory = SteamStore().steamDirectory(in: bottle)
+        let dxvk = runtime.dxvkDirectory
+        try deploy(from: dxvk.appending(path: "x32"), into: steamDirectory)
+        try deploy(
+            from: dxvk.appending(path: "x64"),
+            into: steamDirectory.appending(path: "bin/cef/cef.win64")
         )
     }
 
@@ -222,8 +253,8 @@ public enum GraphicsBackendDeployer {
         }
     }
 
-    /// Puts back every DLL we replaced (idempotent). Covers the Steam
-    /// directories too, where the D3DMetal backend scopes the client to DXVK.
+    /// Puts back every DLL we replaced (idempotent), including Steam-local
+    /// DXVK files installed by older D3DMetal deployments.
     public static func restoreOriginals(in bottle: Bottle) throws {
         let fm = FileManager.default
         try? fm.removeItem(at: bottle.url.appending(path: d3dMetalDeploymentMarker))

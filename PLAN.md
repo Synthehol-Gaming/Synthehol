@@ -90,13 +90,19 @@ most decisions below.
   `-forcesteamupdate -forcepackagedownload -overridepackageurl <archived client url>
   -exitsteam`, then pin with `-noverifyfiles -nobootstrapupdate -skipinitialbootstrap
   -norepairfiles`. `SteamInstaller.defaultLaunchArguments` is the injection point.
+- **Current Steam CEF needs a helper-local software-rendering shim on Wine 11.**
+  Steam does not reliably forward Chromium flags from `steam.exe`, and repairs
+  `steamwebhelper.exe` during every startup. Synthehol therefore lets repair/update
+  finish, preserves Valve's current helper, deploys its bundled delegating shim,
+  and restarts only WebHelper with `--disable-gpu --single-process`. Before the
+  next launch it restores Valve's helper so updates are never pinned or blocked.
 - **Never branch on Wine's textual output** (whisky#435: `reg` errors are localized
   and arrive mojibake in non-UTF-8 locales). Use exit codes or write-then-read.
 - **Wine-under-Rosetta can livelock, not just crash** (Core Keeper, diagnosed
   2026-08-14): Mono's Boehm-GC suspend-retry loop spins forever during Unity
   asset loads; SIGSTOP+SIGCONT of the process breaks it. `GameNudger` +
   per-game "Nudge stuck loading" setting are the workaround.
-- **D3DMetal on the 4.0 beta runtime (learned live, 2026-08-14)**: GPTK's Windows-side
+- **D3DMetal runtime selection (learned live, 2026-08-14)**: GPTK's Windows-side
   bridge DLLs are Wine builtin PE modules and must replace the runtime's
   `x86_64-windows` modules (copying them into a prefix does not select them);
   otherwise Wine's stock PE modules silently route games to wined3d/Vulkan even
@@ -106,11 +112,27 @@ most decisions below.
   copies break `@loader_path` fatally). A runtime switch triggers a prefix update
   that overwrites deployed backend DLLs — run `wineboot -u` then redeploy every
   bottle's backend after installing a runtime. Steam's client cannot render through
-  the GPTK shims *or* this runtime's builtin wined3d (both black-screen): scope
-  Steam to DXVK by copying DXVK DLLs into Steam's own directories (app-local wins
-  over system32). D3DMetal needs `ROSETTA_ADVERTISE_AVX=1` unconditionally. Retina
-  Mode mis-scales the DXVK-scoped Steam window (2x UI in a 1x window) — keep it
-  off in D3DMetal bottles.
+  the GPTK shims or DXMT on this runtime (both black-screen). Wine 11.15 ports the
+  cross-process Metal-layer hosting and visibility fixes needed by Chromium's
+  Vulkan surfaces, so scope only Steam's `d3d10core` and `d3d11` to app-local
+  DXVK and leave its patched builtin DXGI in place; Steam-local DLLs do not alter
+  games in other directories. Avoid CEF GPU/occlusion flags because they bypass
+  that fixed compositor path. The beta's documented MSYNC renderer wedge is
+  reproducible here, so Steam sessions force `WINEMSYNC=0`, `WINEESYNC=1`.
+  D3DMetal needs `ROSETTA_ADVERTISE_AVX=1`
+  unconditionally. Do not use the 4.0.0-beta.2 Wine 10 runtime: the
+  current Steam CEF client renders black under it regardless of DXMT/DXVK or
+  software-rendering flags. Wine Libraries 3.1.1 renders Steam but is not
+  GPTK-capable. The supported candidate is v4.5.105-beta.1: Wine 11.15 with
+  CrossOver 26.3 changes, validated upstream with Steam UI and D3DMetal.
+  Steam client build 1785799196 (2026-08-14) regresses that validation: its
+  CEF GPU process access-violates in the command-buffer path and all tested
+  fallbacks remain black (SwiftShader, software compositing, no sandbox, and
+  forced 32-bit, which the client ignores). The exact previously working
+  direct Wine command now fails too. Upstream Wine commits `ec23c07`,
+  `2293b0e`, and `1a1d1f3`, landed after the Wine 11.15 base, repair client
+  surface detach races, standby-surface reuse, and stale client-view hiding;
+  the next GPTK runtime needs those backported and revalidated.
 - Deferred, verify-before-applying: CrossOver's Steam bottle registry provisioning
   (whisky#41: `GPUAccelWebViews=0`, steamwebhelper `LargeAddressAware=1`, corefonts)
   only if login/render regressions appear; legacy-audio per-game tweaks
@@ -159,9 +181,10 @@ pinned by SHA-256 in the manifest.
   `https://github.com/frankea/Whisky/releases/download/v3.1.1/Libraries.tar.gz`,
   SHA-256 `01f3a1b43b98065fe20c529c1023b61dd79a6d2ad93bba6040865f646481ccf3`
   (published in the release notes; ~332 MB).
-- Beta channel (later): **v4.0.0-beta.2**, GPTK-capable, built from CrossOver 25
-  sources (`frankea/winecx-gptk`); fixes Steam login + video playback. No published
-  checksum — compute and pin our own when adopting. Two gotchas from its notes:
+- GPTK beta: **v4.5.105-beta.1**, Wine 11.15 + CrossOver 26.3, SHA-256
+  `43d78bec577166b5f64b1903f92582e673fbb142ad23921550f77cfeb9ffe0ce`.
+  It replaces the rejected Wine 10 v4.0 betas (beta 1 stalls Steam login;
+  beta 2 renders the current Steam client black). Two gotchas:
   (a) D3DMetal requires the *user's own* GPTK download imported separately (matches
   our no-redistribution stance); (b) CrossOver-lineage runtimes look for the profile
   under `users/crossover` while stock prefixes use `users/<name>` — bottles need a

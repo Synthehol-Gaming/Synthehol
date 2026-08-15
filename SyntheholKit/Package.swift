@@ -9,7 +9,10 @@ let package = Package(
         .executable(name: "synthehol-dev", targets: ["SyntheholCLI"])
     ],
     targets: [
-        .target(name: "SyntheholKit"),
+        .target(
+            name: "SyntheholKit",
+            resources: [.copy("Resources/steamwebhelper-shim.exe")]
+        ),
         .executableTarget(name: "SyntheholCLI", dependencies: ["SyntheholKit"]),
         .testTarget(name: "SyntheholKitTests", dependencies: ["SyntheholKit"])
     ]

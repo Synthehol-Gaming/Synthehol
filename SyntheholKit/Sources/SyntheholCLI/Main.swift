@@ -10,6 +10,7 @@ struct Main {
 
     USAGE:
       synthehol-dev runtime install        Download, verify, install the default runtime
+      synthehol-dev runtime install-gptk   Download, verify, install the GPTK beta runtime
       synthehol-dev runtime list           List installed runtime versions
       synthehol-dev rosetta                Check Rosetta 2 status
       synthehol-dev bottle create <name>   Create a bottle and initialize its prefix
@@ -37,6 +38,8 @@ struct Main {
         switch args.first {
         case "runtime" where args.count >= 2 && args[1] == "install":
             try await installRuntime()
+        case "runtime" where args.count >= 2 && args[1] == "install-gptk":
+            try await installRuntime(.gptkBeta)
         case "runtime" where args.count >= 2 && args[1] == "list":
             let store = RuntimeStore()
             let current = await store.current()
@@ -154,8 +157,7 @@ struct Main {
         return WineExecutor(runtime: runtime)
     }
 
-    static func installRuntime() async throws {
-        let manifest = RuntimeManifest.stableDefault
+    static func installRuntime(_ manifest: RuntimeManifest = .stableDefault) async throws {
         print("Installing runtime \(manifest.version) — \(manifest.notes ?? "")")
         let store = RuntimeStore()
         let runtime = try await store.install(manifest) { progress in

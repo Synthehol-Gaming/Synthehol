@@ -60,7 +60,18 @@ struct BottleDetailView: View {
             }
             if bottle.settings.steamInstalled {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    if model.steamRunning.contains(bottle.id) {
+                    if let transition = model.steamTransitions[bottle.id] {
+                        Button {} label: {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text(transition == .starting ? "Starting Steam" : "Stopping Steam")
+                            }
+                        }
+                        .disabled(true)
+                        .help(transition == .starting
+                            ? "Waiting for Steam to start (45-second timeout)."
+                            : "Waiting for Steam to quit (15-second timeout).")
+                    } else if model.steamRunning.contains(bottle.id) {
                         Button(
                             model.steamClientVisible.contains(bottle.id)
                                 ? "Hide Steam" : "Show Steam",
@@ -252,7 +263,7 @@ struct BottleDetailView: View {
     @ViewBuilder
     private var d3dMetalSetup: some View {
         if model.d3dMetalReady {
-            Text("D3DMetal translates Direct3D 9–12 via Apple's Game Porting Toolkit — best for Direct3D 12 games neither DXMT nor DXVK can run. Steam's own window is kept on DXVK (it can't render through D3DMetal). Pre-release: expect rough edges, and keep Retina Mode off — Steam's window scales incorrectly with it on the beta runtime.")
+            Text("D3DMetal translates Direct3D 9–12 via Apple's Game Porting Toolkit — best for Direct3D 12 games neither DXMT nor DXVK can run. Steam's own web interface uses app-local DXVK, while games continue to use D3DMetal. Pre-release: expect rough edges.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
@@ -262,14 +273,14 @@ struct BottleDetailView: View {
                     .foregroundStyle(.secondary)
                 HStack(spacing: 12) {
                     if model.runtimeSupportsD3DMetal {
-                        Label("Beta runtime installed", systemImage: "checkmark.circle.fill")
+                        Label("Wine 11.15 GPTK runtime installed", systemImage: "checkmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(.green)
                     } else if model.runtimeProgress != nil {
                         ProgressView().controlSize(.small)
                     } else {
-                        Button("Install Beta Runtime (~450 MB)") {
-                            Task { await model.installBetaRuntime() }
+                        Button("Install Wine 11.15 GPTK Runtime (~450 MB)") {
+                            Task { await model.installD3DMetalRuntime() }
                         }
                         .controlSize(.small)
                     }
@@ -290,7 +301,7 @@ struct BottleDetailView: View {
                         .controlSize(.small)
                     }
                 }
-                Text("The toolkit is Apple's “Game Porting Toolkit” from developer.apple.com (sign-in required; Apple's license doesn't allow bundling it — and note it is not the similarly-named third-party “Porting Kit” app). Download it, open the disk image, then import. The beta runtime replaces the stable one; the stable version is kept for rollback.")
+                Text("The toolkit is Apple's “Game Porting Toolkit” from developer.apple.com (sign-in required; Apple's license doesn't allow bundling it — and note it is not the similarly-named third-party “Porting Kit” app). Download it, open the disk image, then import.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -307,13 +318,20 @@ struct BottleDetailView: View {
                     Label("Steam is installed", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                     Spacer()
-                    Button("Quit Steam") {
-                        Task { await model.quitSteam(in: bottle) }
+                    if let transition = model.steamTransitions[bottle.id] {
+                        ProgressView(transition == .starting ? "Starting…" : "Stopping…")
+                            .controlSize(.small)
+                    } else {
+                        Button("Quit Steam") {
+                            Task { await model.quitSteam(in: bottle) }
+                        }
+                        .disabled(!model.steamRunning.contains(bottle.id))
+                        Button("Launch Steam") {
+                            model.launchSteam(in: bottle)
+                        }
+                        .disabled(model.steamRunning.contains(bottle.id))
+                        .buttonStyle(.borderedProminent)
                     }
-                    Button("Launch Steam") {
-                        model.launchSteam(in: bottle)
-                    }
-                    .buttonStyle(.borderedProminent)
                 }
                 Text("Sign in and install games through the Steam window. Closing the window exits Steam (its “Exit Steam” interface setting is on by default), and Synthehol then cleans up its background processes automatically. If Steam is ever configured to minimize to the tray instead, use Quit Steam.")
                     .font(.caption)

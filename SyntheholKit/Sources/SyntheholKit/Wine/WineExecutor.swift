@@ -202,9 +202,14 @@ public struct WineExecutor: Sendable {
         let steamExes = ["steam.exe", "steamwebhelper.exe"]
         if bottle.settings.graphicsBackend == .d3dMetal {
             for exe in steamExes {
-                for dll in ["d3d9", "d3d10core", "d3d11", "dxgi"] {
+                let overridesKey =
+                    #"HKCU\Software\Wine\AppDefaults\"# + exe + #"\DllOverrides"#
+                // Clear settings written by older deployments (notably dxgi
+                // and d3d9) before installing the exact Wine 11.15 pair.
+                await deleteRegistryKey(overridesKey, bottle: bottle)
+                for dll in ["d3d10core", "d3d11"] {
                     try await addRegistryKey(
-                        #"HKCU\Software\Wine\AppDefaults\"# + exe + #"\DllOverrides"#,
+                        overridesKey,
                         name: dll, data: "native,builtin", type: .string, bottle: bottle
                     )
                 }

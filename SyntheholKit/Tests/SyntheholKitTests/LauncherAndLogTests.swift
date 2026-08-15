@@ -82,6 +82,14 @@ struct SteamRunningDetectionTests {
 }
 
 struct DebugLaunchEnvironmentTests {
+    @Test func steamCEFProfileSupportsHiddenClient() {
+        #expect(SteamInstaller.defaultLaunchArguments.isEmpty)
+        #expect(!SteamInstaller.defaultLaunchArguments.contains("-cef-disable-gpu"))
+        #expect(!SteamInstaller.defaultLaunchArguments.contains("-cef-disable-occlusion"))
+        #expect(SteamInstaller.compatibilityEnvironment["WINEMSYNC"] == "0")
+        #expect(SteamInstaller.compatibilityEnvironment["WINEESYNC"] == "1")
+    }
+
     /// The debug profile must override the base environment's quiet
     /// `WINEDEBUG=fixme-all` (extras win in the merge) so debug launches
     /// actually get verbose output.
@@ -95,6 +103,34 @@ struct DebugLaunchEnvironmentTests {
         #expect(env["WINEDEBUG"]?.contains("fixme-all") == false)
         #expect(env["WINEDEBUG"]?.contains("+timestamp") == true)
         #expect(env["GST_DEBUG"] == SteamInstaller.debugEnvironment["GST_DEBUG"])
+    }
+}
+
+struct SteamWebHelperShimTests {
+    @Test func preservesCurrentValveHelperAndRestoresItForUpdates() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let bottle = Bottle(url: temp.appending(path: "Bottle"), settings: BottleSettings(name: "B"))
+        let cef = bottle.url.appending(
+            path: "drive_c/Program Files (x86)/Steam/bin/cef/cef.win64"
+        )
+        try FileManager.default.createDirectory(at: cef, withIntermediateDirectories: true)
+
+        let valveData = Data(repeating: 0x56, count: 600_000)
+        let shimData = Data(repeating: 0x53, count: 1_024)
+        let target = cef.appending(path: "steamwebhelper.exe")
+        let preserved = cef.appending(path: SteamWebHelperShim.valveFileName)
+        let shimSource = temp.appending(path: "shim.exe")
+        try valveData.write(to: target)
+        try shimData.write(to: shimSource)
+
+        let shim = SteamWebHelperShim(shimURL: shimSource)
+        #expect(shim.deploy(in: bottle))
+        #expect(try Data(contentsOf: target) == shimData)
+        #expect(try Data(contentsOf: preserved) == valveData)
+
+        shim.prepareForLaunch(in: bottle)
+        #expect(try Data(contentsOf: target) == valveData)
     }
 }
 

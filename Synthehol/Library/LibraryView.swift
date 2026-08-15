@@ -60,8 +60,12 @@ struct LibraryView: View {
                                 Text("Install games below or through the Steam client — they appear here automatically.")
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
-                                Button("Launch Steam") { model.launchSteam(in: bottle) }
-                                    .buttonStyle(.borderedProminent)
+                                if model.steamTransitions[bottle.id] == .starting {
+                                    ProgressView("Starting Steam…")
+                                } else {
+                                    Button("Launch Steam") { model.launchSteam(in: bottle) }
+                                        .buttonStyle(.borderedProminent)
+                                }
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 30)

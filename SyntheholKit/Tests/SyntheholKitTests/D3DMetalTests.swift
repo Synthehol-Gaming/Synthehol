@@ -26,11 +26,13 @@ private func makeFakeGPTK(at root: URL) throws {
 /// race each other (and the deployer tests) if run concurrently.
 @Suite(.serialized)
 struct D3DMetalSupportTests {
-    @Test func runtimeCapabilityIsLineageGated() {
+    @Test func runtimeCapabilityRejectsBrokenBeta() {
         let stable = WineRuntime(version: "3.1.1", rootDirectory: URL(filePath: "/tmp/r"))
-        let beta = WineRuntime(version: "4.0.0-beta.2", rootDirectory: URL(filePath: "/tmp/r"))
+        let brokenBeta = WineRuntime(version: "4.0.0-beta.2", rootDirectory: URL(filePath: "/tmp/r"))
+        let wine1115 = WineRuntime(version: "4.5.105-beta.1", rootDirectory: URL(filePath: "/tmp/r"))
         #expect(!D3DMetalSupport.runtimeSupports(stable))
-        #expect(D3DMetalSupport.runtimeSupports(beta))
+        #expect(!D3DMetalSupport.runtimeSupports(brokenBeta))
+        #expect(D3DMetalSupport.runtimeSupports(wine1115))
     }
 
     @Test func importsFromRedistLayoutAndDetects() async throws {
@@ -95,8 +97,8 @@ struct D3DMetalSupportTests {
             at: bottle.driveC.appending(path: "windows/system32"),
             withIntermediateDirectories: true
         )
-        let beta = WineRuntime(
-            version: "4.0.0-beta.2", rootDirectory: temp.appending(path: "runtime")
+        let capable = WineRuntime(
+            version: "4.5.105-beta.1", rootDirectory: temp.appending(path: "runtime")
         )
 
         let saved = D3DMetalSupport.importDirectory
@@ -105,16 +107,16 @@ struct D3DMetalSupportTests {
 
         // Not imported yet → refuses.
         #expect(throws: GraphicsBackendDeployer.DeployError.self) {
-            try GraphicsBackendDeployer.apply(.d3dMetal, runtime: beta, bottle: bottle)
+            try GraphicsBackendDeployer.apply(.d3dMetal, runtime: capable, bottle: bottle)
         }
 
         try makeFakeGPTK(at: temp.appending(path: "vol"))
         try await D3DMetalSupport.importGPTK(from: temp.appending(path: "vol"))
 
-        // Stock runtime → refuses.
-        let stable = WineRuntime(version: "3.1.1", rootDirectory: temp.appending(path: "runtime"))
+        // The known-broken Wine 10 beta → refuses.
+        let beta = WineRuntime(version: "4.0.0-beta.2", rootDirectory: temp.appending(path: "runtime"))
         #expect(throws: GraphicsBackendDeployer.DeployError.self) {
-            try GraphicsBackendDeployer.apply(.d3dMetal, runtime: stable, bottle: bottle)
+            try GraphicsBackendDeployer.apply(.d3dMetal, runtime: beta, bottle: bottle)
         }
     }
 
@@ -133,7 +135,7 @@ struct D3DMetalSupportTests {
         try fm.createDirectory(at: profile, withIntermediateDirectories: true)
 
         let runtime = WineRuntime(
-            version: "4.0.0-beta.2", rootDirectory: temp.appending(path: "runtime")
+            version: "4.5.105-beta.1", rootDirectory: temp.appending(path: "runtime")
         )
         try fm.createDirectory(
             at: runtime.librariesDirectory.appending(path: "Wine/lib"),
@@ -146,12 +148,29 @@ struct D3DMetalSupportTests {
         try Data("runtime-builtin".utf8).write(
             to: runtimeWindows.appending(path: "d3d11.dll")
         )
+        let steamCEF = bottle.driveC.appending(
+            path: "Program Files (x86)/Steam/bin/cef/cef.win64"
+        )
+        try fm.createDirectory(at: steamCEF, withIntermediateDirectories: true)
         let dxvk64 = runtime.dxvkDirectory.appending(path: "x64")
         try fm.createDirectory(at: dxvk64, withIntermediateDirectories: true)
-        try Data("DXVK-x64".utf8).write(to: dxvk64.appending(path: "d3d11.dll"))
-        try fm.createDirectory(
-            at: bottle.driveC.appending(path: "Program Files (x86)/Steam/bin/cef/cef.win64"),
-            withIntermediateDirectories: true
+        for dll in ["d3d10core.dll", "d3d11.dll"] {
+            try Data("DXVK-\(dll)".utf8).write(to: dxvk64.appending(path: dll))
+        }
+        let dxmt64 = runtime.librariesDirectory.appending(path: "DXMT/x64")
+        try fm.createDirectory(at: dxmt64, withIntermediateDirectories: true)
+        for dll in ["d3d10core.dll", "d3d11.dll", "dxgi.dll"] {
+            try Data("DXMT-\(dll)".utf8).write(to: dxmt64.appending(path: dll))
+        }
+        // Simulate the previous deployment so the v4 repair proves it removes
+        // the mixed DXVK/D3DMetal stack and restores Steam's original file.
+        try Data("DXVK-x64".utf8).write(to: steamCEF.appending(path: "d3d11.dll"))
+        try Data("steam-original".utf8).write(
+            to: steamCEF.appending(path: "d3d11.dll.synthehol-orig")
+        )
+        // A repeated old repair may leave a DXVK file with no useful backup.
+        try Data("DXVK-d3d10core.dll".utf8).write(
+            to: steamCEF.appending(path: "d3d10core.dll")
         )
 
         let saved = D3DMetalSupport.importDirectory
@@ -178,13 +197,20 @@ struct D3DMetalSupportTests {
             contentsOf: runtimeWindows.appending(path: "d3d11.dll.synthehol-orig"),
             encoding: .utf8
         ) == "runtime-builtin")
-        // Steam's directories get DXVK copies so the client can render.
-        let steamCEF = bottle.driveC.appending(
-            path: "Program Files (x86)/Steam/bin/cef/cef.win64"
-        )
+        // Steam's CEF process gets only the app-local DXVK D3D11 pair.
         #expect(try String(
             contentsOf: steamCEF.appending(path: "d3d11.dll"), encoding: .utf8
-        ) == "DXVK-x64")
+        ) == "DXVK-d3d11.dll")
+        #expect(try String(
+            contentsOf: steamCEF.appending(path: "d3d10core.dll"), encoding: .utf8
+        ) == "DXVK-d3d10core.dll")
+        #expect(!fm.fileExists(
+            atPath: steamCEF.appending(path: "dxgi.dll").path(percentEncoded: false)
+        ))
+        #expect(try String(
+            contentsOf: steamCEF.appending(path: "d3d11.dll.synthehol-orig"),
+            encoding: .utf8
+        ) == "steam-original")
         // Mac-side dylib landed in the runtime's external dir.
         #expect(fm.fileExists(
             atPath: runtime.librariesDirectory

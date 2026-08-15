@@ -22,10 +22,18 @@ public struct SteamInstaller: Sendable {
     public static let installerURL =
         URL(string: "https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe")!
 
-    /// Launch arguments for running Steam under Wine. Empty by default on the
-    /// current runtime; kept as a named profile so it can gain flags (or become
-    /// remotely updatable) when Steam client updates break Wine again.
+    /// Avoid CEF GPU, occlusion, and scaling switches: Wine 11.15's patched
+    /// cross-process compositor needs Chromium's unmodified rendering path.
     public static let defaultLaunchArguments: [String] = []
+
+    /// The Wine 11.15 GPTK beta has a known Chromium renderer wedge under
+    /// MSYNC. Steam and games it starts use ESYNC until that runtime bug is
+    /// fixed upstream. These values intentionally override the bottle's base
+    /// synchronization environment.
+    public static let compatibilityEnvironment = [
+        "WINEMSYNC": "0",
+        "WINEESYNC": "1"
+    ]
 
     /// Environment overrides for debug launches. The base environment sets
     /// `WINEDEBUG=fixme-all`; this replaces it with Wine's default channels
@@ -102,7 +110,10 @@ public struct SteamInstaller: Sendable {
         debugLogging: Bool = false,
         nudgeStuckLoadingFor nudgeGame: InstalledGame? = nil
     ) -> LaunchSession {
-        var environment = extraEnvironment
+        let webHelperShim = SteamWebHelperShim()
+        webHelperShim.prepareForLaunch(in: bottle)
+        var environment = Self.compatibilityEnvironment
+        environment.merge(extraEnvironment) { _, explicit in explicit }
         if debugLogging {
             environment.merge(Self.debugEnvironment) { _, debug in debug }
         }
@@ -125,6 +136,27 @@ public struct SteamInstaller: Sendable {
             GameNudger.startMonitor(for: game) { [sessionLog] event in
                 Log.steam.info("\(event, privacy: .public)")
                 sessionLog?.append("[nudge] \(event)")
+            }
+        }
+        Task.detached(priority: .utility) {
+            // Steam repairs CEF immediately after startup. Let that complete,
+            // then wrap the freshly installed helper and restart only CEF.
+            // Repeat if a slower client update replaces it once more.
+            for attempt in 0..<6 {
+                try? await Task.sleep(for: .seconds(attempt == 0 ? 6 : 4))
+                guard webHelperShim.deploy(in: bottle) else {
+                    if webHelperShim.isDeployed(in: bottle) { return }
+                    continue
+                }
+                _ = try? await executor.runWine(
+                    ["taskkill", "/F", "/IM", "steamwebhelper.exe"], bottle: bottle,
+                    extraEnvironment: environment
+                )
+                _ = try? await executor.runWine(
+                    ["taskkill", "/F", "/IM", SteamWebHelperShim.valveFileName], bottle: bottle,
+                    extraEnvironment: environment
+                )
+                Log.steam.info("Restarted Steam WebHelper with software rendering compatibility")
             }
         }
         let task = Task.detached(priority: .utility) {

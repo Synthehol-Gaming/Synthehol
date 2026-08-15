@@ -25,6 +25,8 @@ final class AppModel {
     var steamProgress: [Bottle.ID: SteamInstaller.Progress] = [:]
     var installedGames: [Bottle.ID: [InstalledGame]] = [:]
     var steamRunning: Set<Bottle.ID> = []
+    enum SteamTransition: Equatable { case starting, stopping }
+    var steamTransitions: [Bottle.ID: SteamTransition] = [:]
     /// Visibility of Steam's own Wine process. Game windows use separate
     /// processes and remain visible when the client is hidden.
     var steamClientVisible: Set<Bottle.ID> = []
@@ -156,6 +158,8 @@ final class AppModel {
                 continue
             }
             steamRunning.insert(bottle.id)
+            steamClientRequestedVisible.remove(bottle.id)
+            watchNewWineWindows(hidingSteamIn: bottle)
             hideSteamClientSoon(in: bottle)
             refreshGames(in: bottle)
             // Restore "Running" badges for games that survived the relaunch.
@@ -321,9 +325,8 @@ final class AppModel {
         }
     }
 
-    /// Installs the GPTK-capable beta runtime (the stable runtime is kept
-    /// for rollback by the runtime store).
-    func installBetaRuntime() async {
+    /// Installs the Wine 11.15 GPTK runtime used by both Steam and D3DMetal.
+    func installD3DMetalRuntime() async {
         await installRuntime(.gptkBeta)
     }
 
@@ -427,14 +430,34 @@ final class AppModel {
 
     func launchSteam(in bottle: Bottle) {
         guard let executor else { return }
-        steamRunning.insert(bottle.id)
-        steamClientVisible.remove(bottle.id)
+        guard steamTransitions[bottle.id] == nil,
+              !steamRunning.contains(bottle.id) else { return }
+        steamTransitions[bottle.id] = .starting
         steamClientRequestedVisible.remove(bottle.id)
+        steamClientVisible.remove(bottle.id)
         watchNewWineWindows(hidingSteamIn: bottle)
+        hideSteamClientSoon(in: bottle)
         let session = SteamInstaller().launch(in: bottle, executor: executor)
+        Task { [weak self] in
+            let steam = SteamInstaller()
+            let deadline = ContinuousClock.now + .seconds(45)
+            while ContinuousClock.now < deadline {
+                guard self?.steamTransitions[bottle.id] == .starting else { return }
+                if await steam.isRunning(in: bottle) {
+                    self?.steamRunning.insert(bottle.id)
+                    self?.steamTransitions[bottle.id] = nil
+                    return
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
+            guard self?.steamTransitions[bottle.id] == .starting else { return }
+            self?.steamTransitions[bottle.id] = nil
+            self?.lastError = "Steam did not start within 45 seconds."
+        }
         Task { [weak self] in
             await session.task.value
             self?.steamRunning.remove(bottle.id)
+            self?.steamTransitions[bottle.id] = nil
             self?.forgetSteamClientPID(for: bottle)
             self?.refreshGames(in: bottle)
         }
@@ -450,7 +473,10 @@ final class AppModel {
         gameRunStates[game.id] = .starting
         watchGame(game)
         steamRunning.insert(bottle.id)
+        steamClientRequestedVisible.remove(bottle.id)
+        steamClientVisible.remove(bottle.id)
         watchNewWineWindows(hidingSteamIn: bottle)
+        hideSteamClientSoon(in: bottle)
         let session = SteamInstaller().launchGame(
             game, in: bottle, executor: executor, debugLogging: debugLogging
         )
@@ -595,6 +621,7 @@ final class AppModel {
     func installOwnedGame(_ game: InstalledGame, in bottle: Bottle) {
         guard let executor else { return }
         steamRunning.insert(bottle.id)
+        steamClientRequestedVisible.insert(bottle.id)
         watchNewWineWindows(hidingSteamIn: bottle)
         activateExistingWineWindowsSoon()
         let session = SteamInstaller().requestInstall(
@@ -612,6 +639,7 @@ final class AppModel {
     func uninstallGame(_ game: InstalledGame, in bottle: Bottle) {
         guard let executor else { return }
         steamRunning.insert(bottle.id)
+        steamClientRequestedVisible.insert(bottle.id)
         watchNewWineWindows(hidingSteamIn: bottle)
         activateExistingWineWindowsSoon()
         let session = SteamInstaller().requestUninstall(of: game, in: bottle, executor: executor)
@@ -733,16 +761,18 @@ final class AppModel {
         let name = String(decoding: buffer.prefix(Int(length)).map(UInt8.init(bitPattern:)), as: UTF8.self)
             .lowercased()
         return name.hasSuffix("steamwebhelper.exe")
+            || name.hasSuffix("steamwebhelper_real.exe")
     }
 
-    /// Hides an adopted/already-running Steam window. Uses the Window Server
-    /// owner PID so only Steam's Wine process is hidden; game windows belong
-    /// to different Wine processes.
+    /// Steam starts one WebHelper, then the compatibility deployment restarts
+    /// it. Keep applying the hidden state across that handoff so the second
+    /// process cannot flash back onscreen. A manual Show Steam request stops
+    /// the loop immediately.
     private func hideSteamClientSoon(in bottle: Bottle) {
         Task { @MainActor in
-            for _ in 0..<20 {
+            for _ in 0..<30 {
                 guard !steamClientRequestedVisible.contains(bottle.id) else { return }
-                if setSteamClientVisible(false, in: bottle) { return }
+                _ = setSteamClientVisible(false, in: bottle)
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
@@ -865,7 +895,27 @@ final class AppModel {
     /// Asks Steam to exit cleanly; the launch monitor then stops the bottle.
     func quitSteam(in bottle: Bottle) async {
         guard let executor else { return }
-        await SteamInstaller().requestExit(in: bottle, executor: executor)
+        guard steamTransitions[bottle.id] == nil else { return }
+        steamTransitions[bottle.id] = .stopping
+        defer { steamTransitions[bottle.id] = nil }
+        let steam = SteamInstaller()
+        await steam.requestExit(in: bottle, executor: executor)
+        let deadline = ContinuousClock.now + .seconds(15)
+        while ContinuousClock.now < deadline {
+            if await !steam.isRunning(in: bottle) {
+                steamRunning.remove(bottle.id)
+                steamClientVisible.remove(bottle.id)
+                forgetSteamClientPID(for: bottle)
+                return
+            }
+            try? await Task.sleep(for: .seconds(1))
+        }
+        // Steam sometimes leaves its bootstrapper or WebHelper behind. The
+        // timeout makes Stop deterministic instead of leaving the UI wedged.
+        try? await executor.killBottle(bottle)
+        steamRunning.remove(bottle.id)
+        steamClientVisible.remove(bottle.id)
+        forgetSteamClientPID(for: bottle)
     }
 
     /// Stops everything in a bottle: graceful Steam exit first (if installed),

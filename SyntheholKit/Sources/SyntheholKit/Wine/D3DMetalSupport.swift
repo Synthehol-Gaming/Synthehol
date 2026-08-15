@@ -6,7 +6,7 @@ import Foundation
 /// D3DMetal is never redistributed with Synthehol (Apple's GPTK license):
 /// the user downloads the Game Porting Toolkit from Apple and imports it;
 /// the libraries are copied under our Application Support. Running it also
-/// needs a CrossOver-lineage runtime (the 4.x beta built from winecx-gptk) —
+/// needs a CrossOver-lineage runtime —
 /// stock Wine can't load the D3DMetal framework.
 public enum D3DMetalSupport {
     /// The current GPTK pre-release requires this macOS or newer.
@@ -45,10 +45,13 @@ public enum D3DMetalSupport {
         )
     }
 
-    /// Whether a runtime can host D3DMetal. Only the CrossOver-lineage 4.x
-    /// builds (winecx-gptk) can; the 3.x series is stock Wine.
+    /// Whether a runtime can host D3DMetal. The 4.5 line rebases CrossOver's
+    /// GPTK support onto Wine 11.15. Reject the 4.0 Wine 10 betas: beta 1
+    /// cannot log into Steam and beta 2 renders the current client black.
     public static func runtimeSupports(_ runtime: WineRuntime) -> Bool {
-        (runtime.version.split(separator: ".").first.flatMap { Int($0) } ?? 0) >= 4
+        let parts = runtime.version.split(separator: ".").prefix(3).map { Int($0) ?? 0 }
+        guard parts.count == 3 else { return false }
+        return parts.lexicographicallyPrecedes([4, 5, 0]) == false
     }
 
     /// A mounted volume containing the toolkit: the inner "Evaluation
