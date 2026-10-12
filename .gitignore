@@ -19,3 +19,6 @@ Package.resolved
 # Generated project (via XcodeGen)
 Synthehol.xcodeproj
 Synthehol/Info.plist
+
+# Packaged release artifacts (published through GitHub Releases)
+dist/
