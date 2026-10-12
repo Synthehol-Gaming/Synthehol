@@ -105,5 +105,25 @@ struct BottleSettingsTests {
         #expect(decoded.name == "Old Bottle")
         #expect(decoded.enhancedSync == .msync)
         #expect(decoded.fileVersion == 1)
+        #expect(decoded.steamWebAPIKeyID == nil)
+    }
+
+    @Test func roundtripsSelectedSharedSteamWebAPIKey() throws {
+        var settings = BottleSettings(name: "Shared Library")
+        settings.steamWebAPIKeyID = "key-profile-1"
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(BottleSettings.self, from: data)
+        #expect(decoded.steamWebAPIKeyID == "key-profile-1")
+    }
+
+    @Test func roundtripsAdditionalDrivesAndDefaultsLegacyMetadataToNone() throws {
+        var settings = BottleSettings(name: "Drives")
+        settings.drives = [BottleDrive(letter: "D", url: URL(filePath: "/Users/me/Games"))]
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(BottleSettings.self, from: data)
+        #expect(decoded.drives == settings.drives)
+
+        let legacy = #"{"name":"Legacy"}"#.data(using: .utf8)!
+        #expect(try JSONDecoder().decode(BottleSettings.self, from: legacy).drives.isEmpty)
     }
 }

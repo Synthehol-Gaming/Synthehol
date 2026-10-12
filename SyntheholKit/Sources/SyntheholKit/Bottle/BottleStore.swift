@@ -1,12 +1,29 @@
 import Foundation
 
+public struct BottleStorage: Codable, Equatable, Identifiable, Sendable {
+    public static let defaultID = "synthehol-default"
+
+    public let id: String
+    public var name: String
+    public var path: String
+
+    public init(id: String = UUID().uuidString, name: String, url: URL) {
+        self.id = id
+        self.name = name
+        path = url.path(percentEncoded: false)
+    }
+
+    public var url: URL { URL(filePath: path, directoryHint: .isDirectory) }
+}
+
 /// The registry of known bottles: a versioned plist holding bottle directory paths.
 /// Bottles themselves are self-describing (`Metadata.plist` in the bottle dir), so
 /// the registry is only a list — bottles can live anywhere and be re-adopted.
 public actor BottleStore {
     private struct Registry: Codable {
-        var fileVersion: Int = 1
+        var fileVersion: Int = 2
         var paths: [String] = []
+        var storages: [BottleStorage] = []
         /// Paths the user explicitly forgot (kept on disk). Auto-discovery must
         /// not resurrect these; `adopt` clears the mark.
         var forgottenPaths: [String] = []
@@ -17,6 +34,7 @@ public actor BottleStore {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             fileVersion = try c.decodeIfPresent(Int.self, forKey: .fileVersion) ?? 1
             paths = try c.decodeIfPresent([String].self, forKey: .paths) ?? []
+            storages = try c.decodeIfPresent([BottleStorage].self, forKey: .storages) ?? []
             forgottenPaths = try c.decodeIfPresent([String].self, forKey: .forgottenPaths) ?? []
         }
     }
@@ -44,15 +62,17 @@ public actor BottleStore {
     public func bottles() -> [Bottle] {
         var registry = loadRegistry()
 
-        let candidates = (try? FileManager.default.contentsOfDirectory(
-            at: defaultDirectory, includingPropertiesForKeys: [.isDirectoryKey]
-        )) ?? []
-        for candidate in candidates
-        where FileManager.default.fileExists(
-            atPath: candidate.appending(path: Bottle.metadataFileName).path(percentEncoded: false)
-        ) && !registry.paths.contains(where: { pathsEqual($0, candidate) })
-            && !registry.forgottenPaths.contains(where: { pathsEqual($0, candidate) }) {
-            registry.paths.append(candidate.path(percentEncoded: false))
+        for storage in storageLocations(from: registry) {
+            let candidates = (try? FileManager.default.contentsOfDirectory(
+                at: storage.url, includingPropertiesForKeys: [.isDirectoryKey]
+            )) ?? []
+            for candidate in candidates
+            where FileManager.default.fileExists(
+                atPath: candidate.appending(path: Bottle.metadataFileName).path(percentEncoded: false)
+            ) && !registry.paths.contains(where: { pathsEqual($0, candidate) })
+                && !registry.forgottenPaths.contains(where: { pathsEqual($0, candidate) }) {
+                registry.paths.append(candidate.path(percentEncoded: false))
+            }
         }
         try? saveRegistry(registry)
 
@@ -67,8 +87,16 @@ public actor BottleStore {
 
     /// Creates a bottle directory + metadata and registers it. The Wine prefix is
     /// initialized separately (`WineExecutor.initializePrefix`) so UI can stage it.
-    public func create(name: String, windowsVersion: WindowsVersion = .win10) throws -> Bottle {
-        var bottle = try Bottle.create(name: name, in: defaultDirectory)
+    public func create(
+        name: String,
+        windowsVersion: WindowsVersion = .win10,
+        storageID: BottleStorage.ID = BottleStorage.defaultID
+    ) throws -> Bottle {
+        let registry = loadRegistry()
+        guard let storage = storageLocations(from: registry).first(where: { $0.id == storageID })
+        else { throw CocoaError(.fileNoSuchFile) }
+        try FileManager.default.createDirectory(at: storage.url, withIntermediateDirectories: true)
+        var bottle = try Bottle.create(name: name, in: storage.url)
         bottle.settings.windowsVersion = windowsVersion
         try bottle.saveSettings()
         register(bottle.url)
@@ -111,6 +139,32 @@ public actor BottleStore {
         try bottle.saveSettings()
     }
 
+    // MARK: Storage locations
+
+    public func storageLocations() -> [BottleStorage] {
+        storageLocations(from: loadRegistry())
+    }
+
+    @discardableResult
+    public func addStorage(name: String, url: URL) throws -> BottleStorage {
+        var registry = loadRegistry()
+        let canonical = url.canonicalPath
+        guard !storageLocations(from: registry).contains(where: { $0.url.canonicalPath == canonical })
+        else { throw CocoaError(.fileWriteFileExists) }
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let storage = BottleStorage(name: name, url: url)
+        registry.storages.append(storage)
+        try saveRegistry(registry)
+        return storage
+    }
+
+    public func removeStorage(id: BottleStorage.ID) throws {
+        guard id != BottleStorage.defaultID else { return }
+        var registry = loadRegistry()
+        registry.storages.removeAll { $0.id == id }
+        try saveRegistry(registry)
+    }
+
     // MARK: Registry persistence
 
     private func register(_ url: URL) {
@@ -136,6 +190,11 @@ public actor BottleStore {
         let encoder = PropertyListEncoder()
         encoder.outputFormat = .xml
         try (try encoder.encode(registry)).write(to: registryURL, options: .atomic)
+    }
+
+    private func storageLocations(from registry: Registry) -> [BottleStorage] {
+        [BottleStorage(id: BottleStorage.defaultID, name: "Built-in", url: defaultDirectory)]
+            + registry.storages
     }
 
     /// Compares paths ignoring trailing slashes (URL(filePath:) adds one for

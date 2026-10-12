@@ -39,6 +39,7 @@ struct SyntheholApp: App {
         }
         Settings {
             SettingsView()
+                .environment(model)
         }
     }
 }

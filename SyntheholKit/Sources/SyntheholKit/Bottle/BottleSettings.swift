@@ -39,6 +39,19 @@ public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
     case dxvk
 }
 
+public struct BottleDrive: Codable, Equatable, Identifiable, Sendable {
+    public var letter: String
+    public var path: String
+
+    public init(letter: String, url: URL) {
+        self.letter = letter.uppercased()
+        path = url.path(percentEncoded: false)
+    }
+
+    public var id: String { letter.uppercased() }
+    public var url: URL { URL(filePath: path, directoryHint: .isDirectory) }
+}
+
 /// Per-bottle configuration, persisted as `Metadata.plist` in the bottle directory.
 ///
 /// `fileVersion` gates additive migrations. Unlike Whisky, a version or runtime
@@ -70,8 +83,12 @@ public struct BottleSettings: Codable, Equatable, Sendable {
     /// displays — with the Windows default of 96 everything renders half-size),
     /// 96 otherwise.
     public var dpi: Int?
+    public var drives: [BottleDrive]
 
     public var steamInstalled: Bool
+    /// Identifier of a shared Steam Web API key profile. The secret itself is
+    /// stored once in app preferences so multiple bottles can select it.
+    public var steamWebAPIKeyID: String?
 
     public init(name: String, created: Date = .now) {
         self.fileVersion = Self.currentFileVersion
@@ -87,7 +104,9 @@ public struct BottleSettings: Codable, Equatable, Sendable {
         self.captureDisplaysForFullscreen = true
         self.retinaMode = true
         self.dpi = nil
+        self.drives = []
         self.steamInstalled = false
+        self.steamWebAPIKeyID = nil
     }
 
     public init(from decoder: Decoder) throws {
@@ -107,7 +126,9 @@ public struct BottleSettings: Codable, Equatable, Sendable {
         ) ?? true
         retinaMode = try c.decodeIfPresent(Bool.self, forKey: .retinaMode) ?? true
         dpi = try c.decodeIfPresent(Int.self, forKey: .dpi)
+        drives = try c.decodeIfPresent([BottleDrive].self, forKey: .drives) ?? []
         steamInstalled = try c.decodeIfPresent(Bool.self, forKey: .steamInstalled) ?? false
+        steamWebAPIKeyID = try c.decodeIfPresent(String.self, forKey: .steamWebAPIKeyID)
     }
 }
 

@@ -20,6 +20,11 @@ public struct SteamAppMetadata: Codable, Sendable, Equatable {
         self.shortDescription = shortDescription
         self.releaseDate = releaseDate
     }
+
+    /// Steam marks VR-only and VR-capable titles through store categories.
+    public var supportsVR: Bool {
+        categories.contains { $0.localizedCaseInsensitiveContains("VR") }
+    }
 }
 
 /// Disk-cached fetcher for `SteamAppMetadata`, one JSON file per appid under

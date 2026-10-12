@@ -33,8 +33,8 @@ public enum SyntheholPaths {
     /// Cached store metadata (genres, categories) per appid.
     public static var metadata: URL { applicationSupport.appending(path: "Metadata") }
 
-    /// The user's imported Game Porting Toolkit libraries (never bundled —
-    /// Apple's GPTK license doesn't allow redistribution).
+    /// The user's imported Game Porting Toolkit 4 libraries. Kept outside
+    /// the app bundle because Apple distributes the evaluation payload separately.
     public static var gptk: URL { applicationSupport.appending(path: "GPTK") }
 
     /// The bottle registry: a plist listing the paths of all known bottles.

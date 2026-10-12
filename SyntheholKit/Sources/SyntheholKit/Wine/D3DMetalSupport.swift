@@ -9,10 +9,11 @@ import Foundation
 /// needs a CrossOver-lineage runtime —
 /// stock Wine can't load the D3DMetal framework.
 public enum D3DMetalSupport {
-    /// The current GPTK pre-release requires this macOS or newer.
+    /// Game Porting Toolkit 4 targets the macOS 27 generation.
     public static let minimumOS = OperatingSystemVersion(
-        majorVersion: 26, minorVersion: 0, patchVersion: 0
+        majorVersion: 27, minorVersion: 0, patchVersion: 0
     )
+    public static let requiredMajorVersion = 4
 
     public static var osSupported: Bool {
         ProcessInfo.processInfo.isOperatingSystemAtLeast(minimumOS)
@@ -34,9 +35,13 @@ public enum D3DMetalSupport {
         importDirectory.appending(path: "lib/external")
     }
 
+    public static var importedVersion: String? {
+        frameworkVersion(in: importDirectory.appending(path: "lib"))
+    }
+
     public static var isImported: Bool {
         let fm = FileManager.default
-        return fm.fileExists(
+        return isSupportedVersion(importedVersion) && fm.fileExists(
             atPath: externalLibraries.appending(path: "libd3dshared.dylib")
                 .path(percentEncoded: false)
         ) && fm.fileExists(
@@ -70,6 +75,7 @@ public enum D3DMetalSupport {
     public enum ImportError: LocalizedError {
         case librariesNotFound(URL)
         case mountFailed(String)
+        case unsupportedVersion(String?)
 
         public var errorDescription: String? {
             switch self {
@@ -77,6 +83,8 @@ public enum D3DMetalSupport {
                 "Couldn't find the Game Porting Toolkit libraries in \"\(url.lastPathComponent)\". Pick the mounted Game Porting Toolkit disk image (or its \"redist\" folder) from Apple's download."
             case .mountFailed(let name):
                 "Couldn't open the nested disk image \"\(name)\" inside the Game Porting Toolkit download."
+            case .unsupportedVersion(let version):
+                "Synthehol requires Game Porting Toolkit 4 beta 2 or newer. The selected libraries report \(version ?? "no version"); download the current release from Apple and try again."
             }
         }
     }
@@ -130,6 +138,10 @@ public enum D3DMetalSupport {
 
     private static func copyLibraries(from lib: URL) throws {
         let fm = FileManager.default
+        let version = frameworkVersion(in: lib)
+        guard isSupportedVersion(version) else {
+            throw ImportError.unsupportedVersion(version)
+        }
         let destination = importDirectory.appending(path: "lib")
         try fm.createDirectory(
             at: importDirectory, withIntermediateDirectories: true
@@ -139,6 +151,31 @@ public enum D3DMetalSupport {
         }
         try fm.copyItem(at: lib, to: destination)
         stripQuarantine(destination)
+    }
+
+    private static func frameworkVersion(in lib: URL) -> String? {
+        let plist = lib.appending(path: "external/D3DMetal.framework/Resources/Info.plist")
+        guard let data = try? Data(contentsOf: plist),
+              let value = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let info = value as? [String: Any]
+        else { return nil }
+        return (info["CFBundleShortVersionString"] as? String)
+            ?? (info["CFBundleVersion"] as? String)
+    }
+
+    static func isSupportedVersion(_ version: String?) -> Bool {
+        guard let version else { return false }
+        let lower = version.lowercased()
+        if let betaRange = lower.range(of: "b", options: .backwards),
+           lower[betaRange.upperBound...].allSatisfy(\.isNumber) {
+            let base = lower[..<betaRange.lowerBound]
+            let major = Int(base.split(separator: ".").first ?? "") ?? 0
+            let beta = Int(lower[betaRange.upperBound...]) ?? 0
+            return major > requiredMajorVersion
+                || (major == requiredMajorVersion && beta >= 2)
+        }
+        let major = Int(lower.split(separator: ".").first ?? "") ?? 0
+        return major >= requiredMajorVersion
     }
 
     /// Apple's DMG download stamps `com.apple.quarantine` on everything;

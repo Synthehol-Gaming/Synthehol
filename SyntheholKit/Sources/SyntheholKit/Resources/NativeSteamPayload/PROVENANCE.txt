@@ -1,0 +1,12 @@
+Bridge payload imported from NotProton v1.1.7 release artifact:
+https://github.com/NotProtonNot/NotProton/releases/tag/v1.1.7
+
+Release archive SHA-256:
+df116f5185fb57b6f6f8ff5f593b9851edb697a01777e403e1fd23185f9bdbff
+
+Bridge component SHA-256 values:
+7c542d4806a09e3b13d4f1f84b0b6e73bbb8b63691320aff6623a875aba2f642  aarch64-unix-lsteamclient.so
+53d0c0aa08482cab64906a910772d65d0838b92cf4f4e83b29c794368791e7d4  i386-windows-lsteamclient.dll
+58413caf03cd8d39a7b387f573f2ba921a6d438c2fac2332e43bc195827af5c4  steam.exe
+2f4b01479d23ccb28bbb30dfda087a0cb1a2fd5053db9ed891183395e065581f  x86_64-unix-lsteamclient.so
+00727bb4b4094183826fe81c093d28ee056f1486ca21341ecb427127278ce753  x86_64-windows-lsteamclient.dll

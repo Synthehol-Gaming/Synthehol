@@ -25,6 +25,9 @@ public enum GameNudger {
     /// separator style; nil when the install directory is unknown.
     public static func processPattern(for game: InstalledGame) -> String? {
         guard let directory = game.installPath, !directory.isEmpty else { return nil }
+        if directory.hasPrefix("/") {
+            return NSRegularExpression.escapedPattern(for: directory)
+        }
         return "steamapps.common." + NSRegularExpression.escapedPattern(for: directory) + "."
     }
 

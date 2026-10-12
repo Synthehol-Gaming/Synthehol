@@ -8,7 +8,7 @@ struct ArtworkSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let game: InstalledGame
-    let bottle: Bottle
+    let bottle: Bottle?
 
     @AppStorage("steamGridDBAPIKey") private var apiKey = ""
     @State private var showFileImporter = false
@@ -20,7 +20,8 @@ struct ArtworkSheet: View {
 
     /// Official artwork variants Valve hosts for every Steam app.
     private var officialCandidates: [(label: String, url: URL)] {
-        guard game.store == SteamStore.storeID else { return [] }
+        guard game.store == SteamStore.storeID || game.store == NativeSteamStore.storeID
+        else { return [] }
         let base = "https://steamcdn-a.akamaihd.net/steam/apps/\(game.storeGameID)"
         return [
             ("Poster", URL(string: "\(base)/library_600x900_2x.jpg")!),
@@ -78,7 +79,11 @@ struct ArtworkSheet: View {
                 Spacer()
                 Button("Reset to Default") {
                     Task {
-                        await model.resetPoster(for: game, in: bottle)
+                        if let bottle {
+                            await model.resetPoster(for: game, in: bottle)
+                        } else {
+                            await model.resetNativePoster(for: game)
+                        }
                         dismiss()
                     }
                 }
@@ -203,7 +208,7 @@ struct ArtworkSheet: View {
         let client = SteamGridDBClient(apiKey: apiKey)
         do {
             var results: [SteamGridDBClient.Grid] = []
-            if game.store == SteamStore.storeID {
+            if game.store == SteamStore.storeID || game.store == NativeSteamStore.storeID {
                 results = (try? await client.grids(forSteamAppID: game.storeGameID)) ?? []
             }
             if results.isEmpty,

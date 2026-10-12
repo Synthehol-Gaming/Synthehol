@@ -72,15 +72,17 @@ public struct WineExecutor: Sendable {
         arguments: [String] = [],
         bottle: Bottle,
         waitForExit: Bool = false,
+        workingDirectory: URL? = nil,
         extraEnvironment: [String: String] = [:]
     ) -> AsyncThrowingStream<ProcessEvent, any Error> {
         let startArguments = ["start"]
             + (waitForExit ? ["/wait"] : [])
             + ["/unix", executable.path(percentEncoded: false)]
-        return streamWine(
-            startArguments + arguments,
-            bottle: bottle,
-            extraEnvironment: extraEnvironment
+        return ProcessRunner.stream(
+            executable: runtime.wine64,
+            arguments: startArguments + arguments,
+            environment: environment(for: bottle, extra: extraEnvironment),
+            currentDirectory: workingDirectory
         )
     }
 

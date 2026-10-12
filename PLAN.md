@@ -11,6 +11,9 @@ Windows applications.
 
 - Apple Silicon only (M1+), Metal required. No Intel support.
 - One or more bottles per user; Synthehol fully automates bottle setup including Steam.
+- Native macOS Steam is also a first-class configuration. Synthehol discovers
+  its libraries and supplies an embedded, NotProton-derived Steam Play layer so
+  Windows games can remain in the user's ordinary Mac Steam installation.
 - Steam is the install channel for games (v1), but it is **provider #1, not a structural
   assumption**: game discovery, artwork, and launch go through a `GameStoreProvider`
   abstraction so other stores (GOG first — via GOG Galaxy or offline installers — then
@@ -102,6 +105,11 @@ most decisions below.
   2026-08-14): Mono's Boehm-GC suspend-retry loop spins forever during Unity
   asset loads; SIGSTOP+SIGCONT of the process breaks it. `GameNudger` +
   per-game "Nudge stuck loading" setting are the workaround.
+- **GPTK 4 / macOS 27 transition (2026-10-12)**: macOS 27 is now the minimum
+  for D3DMetal. Apple's latest evaluation environment remains GPTK 4 beta 2
+  (`D3DMetal.framework` version `4.0b2`), so imports accept beta 2 or newer and
+  reject older GPTK payloads. Apple still distributes the evaluation libraries
+  separately, so Synthehol imports rather than bundles them.
 - **D3DMetal runtime selection (learned live, 2026-08-14)**: GPTK's Windows-side
   bridge DLLs are Wine builtin PE modules and must replace the runtime's
   `x86_64-windows` modules (copying them into a prefix does not select them);
@@ -255,6 +263,25 @@ Steam appids directly. Steam ships in v1; GOG later — likely via GOG Galaxy in
 (its `galaxy-2.0.db` SQLite holds the installed-game list) or offline installers, with
 artwork from the GOG API. Store bootstrap (Phase 3's Steam installer) gets the same
 treatment: a per-provider "install the store client silently" step.
+
+### Native Steam compatibility
+
+Native Steam is an execution environment, not a bottle. Its libraries live in
+`~/Library/Application Support/Steam/steamapps` and each Windows title receives
+a Proton-style prefix under that library's `steamapps/compatdata/<appid>/pfx`.
+Synthehol keeps native and bottle game identities distinct even when their Steam
+appids match.
+
+The compatibility implementation is derived from NotProton: a version-gated
+injection into the native Steam client publishes macOS compatibility tools, and
+patched, user-supplied CrossOver runners execute games. Never apply binary
+patches by version string alone: verify every input hash, stage updates
+atomically, preserve a repair path for Steam.app, and refuse foreign dylib
+injections rather than overwriting them. CrossOver remains a separately licensed
+user-supplied component and is copied into Synthehol's Application Support.
+All reused source and payloads are vendored, renamed, built, installed, updated,
+and repaired by Synthehol. Neither building nor using this feature may require a
+NotProton checkout, application bundle, installation, or support directory.
 
 ## Phases
 

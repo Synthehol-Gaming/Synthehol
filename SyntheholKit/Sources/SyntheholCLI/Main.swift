@@ -10,7 +10,7 @@ struct Main {
 
     USAGE:
       synthehol-dev runtime install        Download, verify, install the default runtime
-      synthehol-dev runtime install-gptk   Download, verify, install the GPTK beta runtime
+      synthehol-dev runtime install-gptk   Download and verify the GPTK-capable Wine runtime
       synthehol-dev runtime list           List installed runtime versions
       synthehol-dev rosetta                Check Rosetta 2 status
       synthehol-dev bottle create <name>   Create a bottle and initialize its prefix

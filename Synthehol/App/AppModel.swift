@@ -15,11 +15,55 @@ private let gameStateLog = Logger(
 @Observable
 final class AppModel {
     private static let selectedBottleDefaultsKey = "selectedBottleID"
+    private static let nativeSteamSelectedDefaultsKey = "nativeSteamSelected"
+    private static let steamWebAPIKeysDefaultsKey = "steamWebAPIKeys"
+    private static let legacySteamWebAPIKeyDefaultsKey = "steamWebAPIKey"
+    private static let nativeSteamWebAPIKeyIDDefaultsKey = "nativeSteamWebAPIKeyID"
+    private static let showNativeSteamVRGamesDefaultsKey = "showNativeSteamVRGames"
+
+    struct SteamWebAPIKeyProfile: Codable, Identifiable, Equatable {
+        let id: String
+        var name: String
+        var key: String
+
+        var displayName: String {
+            let suffix = String(key.suffix(4))
+            return suffix.isEmpty ? name : "\(name) (••••\(suffix))"
+        }
+    }
 
     let bottleStore = BottleStore()
     let runtimeStore = RuntimeStore()
 
     var bottles: [Bottle] = []
+    var nativeSteamSelected = false {
+        didSet { UserDefaults.standard.set(nativeSteamSelected, forKey: Self.nativeSteamSelectedDefaultsKey) }
+    }
+    var nativeSteamGames: [InstalledGame] = []
+    var nativeOwnedGames: [InstalledGame] = []
+    var nativeOwnedGamesError: String?
+    var loadingNativeOwnedGames = false
+    var showNativeSteamVRGames = true {
+        didSet {
+            UserDefaults.standard.set(
+                showNativeSteamVRGames, forKey: Self.showNativeSteamVRGamesDefaultsKey
+            )
+        }
+    }
+    var nativeSteamWebAPIKeyID: String? {
+        didSet {
+            UserDefaults.standard.set(
+                nativeSteamWebAPIKeyID, forKey: Self.nativeSteamWebAPIKeyIDDefaultsKey
+            )
+        }
+    }
+    var nativeSteamStatus = NativeSteamCompatibilityStatus(deployment: .notInstalled)
+    let nativeSteamStore = NativeSteamStore()
+    let nativeGameSettingsDirectory = SyntheholPaths.applicationSupport
+        .appending(path: "NativeSteam/Game Settings")
+    var bottleStorages: [BottleStorage] = []
+    var steamWebAPIKeys: [SteamWebAPIKeyProfile] = []
+    private var migratedLegacySteamWebAPIKeyID: String?
     var selectedBottleID: Bottle.ID? {
         didSet {
             guard selectedBottleID != oldValue else { return }
@@ -36,9 +80,10 @@ final class AppModel {
     var runtimeProgress: RuntimeInstallProgress?
     var busyBottleIDs: Set<Bottle.ID> = []
     var steamProgress: [Bottle.ID: SteamInstaller.Progress] = [:]
+    var installerRunning: Set<Bottle.ID> = []
     var installedGames: [Bottle.ID: [InstalledGame]] = [:]
     var steamRunning: Set<Bottle.ID> = []
-    enum SteamTransition: Equatable { case starting, stopping }
+    enum SteamTransition: Equatable { case starting, stopping, stopTimedOut }
     var steamTransitions: [Bottle.ID: SteamTransition] = [:]
     /// Visibility of Steam's own Wine process. Game windows use separate
     /// processes and remain visible when the client is hidden.
@@ -70,6 +115,7 @@ final class AppModel {
     var ownedGamesError: [Bottle.ID: String] = [:]
     var loadingOwnedGames: Set<Bottle.ID> = []
     var lastError: String?
+    var needsAppManagementPermission = false
 
     /// Per-game launch lifecycle, keyed by game ID. `starting` from the Play
     /// click until the game's process appears; `running` while it exists.
@@ -86,12 +132,50 @@ final class AppModel {
     var gameMetadata: [String: SteamAppMetadata] = [:]
     private let metadataStore = SteamMetadataStore()
 
+    init() {
+        nativeSteamSelected = UserDefaults.standard.bool(forKey: Self.nativeSteamSelectedDefaultsKey)
+        nativeSteamWebAPIKeyID = UserDefaults.standard.string(
+            forKey: Self.nativeSteamWebAPIKeyIDDefaultsKey
+        )
+        if UserDefaults.standard.object(forKey: Self.showNativeSteamVRGamesDefaultsKey) != nil {
+            showNativeSteamVRGames = UserDefaults.standard.bool(
+                forKey: Self.showNativeSteamVRGamesDefaultsKey
+            )
+        }
+        if let data = UserDefaults.standard.data(forKey: Self.steamWebAPIKeysDefaultsKey),
+           let profiles = try? JSONDecoder().decode([SteamWebAPIKeyProfile].self, from: data) {
+            steamWebAPIKeys = profiles
+        } else if let legacy = UserDefaults.standard.string(
+            forKey: Self.legacySteamWebAPIKeyDefaultsKey
+        )?.trimmingCharacters(in: .whitespacesAndNewlines), !legacy.isEmpty {
+            let profile = SteamWebAPIKeyProfile(
+                id: UUID().uuidString, name: "Default", key: legacy
+            )
+            steamWebAPIKeys = [profile]
+            migratedLegacySteamWebAPIKeyID = profile.id
+            saveSteamWebAPIKeys()
+            UserDefaults.standard.removeObject(forKey: Self.legacySteamWebAPIKeyDefaultsKey)
+        }
+        if nativeSteamWebAPIKeyID == nil, steamWebAPIKeys.count == 1 {
+            nativeSteamWebAPIKeyID = steamWebAPIKeys[0].id
+        }
+    }
+
     /// Genres present in the selected configuration's installed library,
     /// with counts, for the sidebar filter list.
     var sidebarGenres: [(genre: String, count: Int)] {
-        guard let bottle = selectedBottle else { return [] }
         var counts: [String: Int] = [:]
-        for game in installedGames[bottle.id] ?? [] {
+        let games: [InstalledGame]
+        if nativeSteamSelected {
+            games = nativeSteamGames.filter {
+                showNativeSteamVRGames || gameMetadata[$0.id]?.supportsVR != true
+            }
+        } else if let bottle = selectedBottle {
+            games = installedGames[bottle.id] ?? []
+        } else {
+            games = []
+        }
+        for game in games {
             for genre in gameMetadata[game.id]?.genres ?? [] {
                 counts[genre, default: 0] += 1
             }
@@ -115,8 +199,22 @@ final class AppModel {
     // MARK: Lifecycle
 
     func refresh() async {
+        refreshNativeSteam()
         runtime = await runtimeStore.current()
+        bottleStorages = await bottleStore.storageLocations()
         bottles = await bottleStore.bottles()
+        for bottle in bottles {
+            try? BottleDriveManager.apply(previous: bottle.settings.drives, current: bottle.settings.drives, to: bottle)
+        }
+        // Preserve the old one-global-key behavior during migration by
+        // explicitly assigning the sole shared profile to unconfigured bottles.
+        if let migratedID = migratedLegacySteamWebAPIKeyID {
+            for index in bottles.indices where bottles[index].settings.steamWebAPIKeyID == nil {
+                bottles[index].settings.steamWebAPIKeyID = migratedID
+                try? bottles[index].saveSettings()
+            }
+            migratedLegacySteamWebAPIKeyID = nil
+        }
         let availableIDs = Set(bottles.map(\.id))
         if let selectedBottleID, availableIDs.contains(selectedBottleID) {
             // Preserve an in-session choice across refreshes.
@@ -131,6 +229,206 @@ final class AppModel {
         WineLogWriter.deleteOldLogs()
         await repairIncompleteD3DMetalDeployments()
         await adoptRunningSessions()
+    }
+
+    func selectNativeSteam() {
+        nativeSteamSelected = true
+        selectedGameFilter = .all
+        refreshNativeSteam()
+    }
+
+    func selectBottle(_ id: Bottle.ID) {
+        nativeSteamSelected = false
+        selectedBottleID = id
+        selectedGameFilter = .all
+    }
+
+    func refreshNativeSteam() {
+        nativeSteamGames = (try? nativeSteamStore.installedGames()) ?? []
+        nativeSteamStatus = NativeSteamCompatibilityStatus.inspect()
+        loadMetadata(for: nativeSteamGames)
+        for game in nativeSteamGames where posterImages[game.id] == nil {
+            Task { [weak self] in _ = await self?.nativePoster(for: game) }
+        }
+    }
+
+    func nativeSteamWebAPIKey() -> String? {
+        guard let id = nativeSteamWebAPIKeyID else { return nil }
+        return steamWebAPIKeys.first { $0.id == id }?.key
+    }
+
+    func refreshNativeOwnedGames() async {
+        guard let apiKey = nativeSteamWebAPIKey(), !apiKey.isEmpty else {
+            nativeOwnedGames = []
+            nativeOwnedGamesError = nil
+            return
+        }
+        guard let user = nativeSteamStore.loginUsers().first else {
+            nativeOwnedGames = []
+            nativeOwnedGamesError = "Sign in to the macOS Steam client once to see your library here."
+            return
+        }
+        loadingNativeOwnedGames = true
+        defer { loadingNativeOwnedGames = false }
+        nativeOwnedGamesError = nil
+        do {
+            let owned = try await SteamOwnedGamesFetcher(apiKey: apiKey)
+                .ownedGames(steamID64: user.steamID64)
+            let installedIDs = Set(nativeSteamGames.map(\.storeGameID))
+            nativeOwnedGames = owned
+                .filter { !SteamStore.nonGameAppIDs.contains($0.appID) }
+                .filter { !installedIDs.contains(String($0.appID)) }
+                .map {
+                    InstalledGame(
+                        store: NativeSteamStore.storeID,
+                        storeGameID: String($0.appID),
+                        name: $0.name,
+                        posterURL: URL(string: "https://steamcdn-a.akamaihd.net/steam/apps/\($0.appID)/library_600x900_2x.jpg")
+                    )
+                }
+            loadMetadata(for: nativeOwnedGames)
+        } catch SteamOwnedGamesFetcher.FetchError.invalidKey {
+            nativeOwnedGames = []
+            nativeOwnedGamesError = "Steam rejected the API key. Check it and try again."
+        } catch {
+            nativeOwnedGames = []
+            nativeOwnedGamesError = "Couldn't load your Steam library right now."
+        }
+    }
+
+    func installNativeOwnedGame(_ game: InstalledGame) {
+        Task { [weak self, nativeSteamStore] in
+            do {
+                try await nativeSteamStore.requestInstall(appID: game.storeGameID)
+            } catch {
+                self?.lastError = "Couldn't install \"\(game.name)\": \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func launchNativeGame(_ game: InstalledGame) {
+        guard gameRunStates[game.id] == nil else { return }
+        guard NativeSteamBridgeProvisioner.isComplete(
+            at: SyntheholPaths.applicationSupport.appending(path: "NativeSteam/bridge")
+        ) else {
+            lastError = "Synthehol Steam Play needs repair before this game can launch. Create a configuration with Steam installed, then choose Install or Repair on the Mac Steam page."
+            return
+        }
+        let settings = GameSettings.load(for: game, in: nativeGameSettingsDirectory)
+        gameRunStates[game.id] = .starting
+        if settings.nudgeStuckLoading {
+            _ = GameNudger.startMonitor(for: game) { event in
+                gameStateLog.log("[native nudge] \(event, privacy: .public)")
+            }
+        }
+        Task { [weak self, nativeSteamStore] in
+            do {
+                try await nativeSteamStore.launch(game)
+                self?.gameRunStates[game.id] = nil
+            } catch {
+                self?.gameRunStates[game.id] = nil
+                self?.lastError = "Couldn't launch \"\(game.name)\": \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func nativeGameSettings(for game: InstalledGame) -> GameSettings {
+        GameSettings.load(for: game, in: nativeGameSettingsDirectory)
+    }
+
+    func saveNativeGameSettings(_ settings: GameSettings, for game: InstalledGame) {
+        do {
+            try settings.save(for: game, in: nativeGameSettingsDirectory)
+        } catch {
+            lastError = "Couldn't save settings for \"\(game.name)\": \(error.localizedDescription)"
+        }
+    }
+
+    func launchNativeSteam() {
+        Task { [weak self, nativeSteamStore] in
+            do {
+                let result = try await ProcessRunner.run(
+                    executable: URL(filePath: "/usr/bin/open"),
+                    arguments: ["-a", nativeSteamStore.steamApplication.path(percentEncoded: false)]
+                )
+                if result.exitCode != 0 {
+                    self?.lastError = "Steam could not be opened."
+                }
+            } catch {
+                self?.lastError = "Steam could not be opened: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func installNativeSteamCompatibility() async {
+        needsAppManagementPermission = false
+        do {
+            let payload = try NativeSteamPayload.bundled()
+            try await NativeSteamInstaller.install(payload: payload, bottles: bottles)
+            nativeSteamStatus = NativeSteamCompatibilityStatus.inspect()
+        } catch NativeSteamInstallError.appManagementPermissionRequired {
+            needsAppManagementPermission = true
+            lastError = NativeSteamInstallError.appManagementPermissionRequired.localizedDescription
+        } catch {
+            lastError = "Couldn't install Synthehol Steam Play: \(error.localizedDescription)"
+        }
+    }
+
+    func openAppManagementSettings() {
+        guard let url = URL(string:
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AppBundles"
+        ) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func repairNativeSteam() async {
+        do {
+            try await NativeSteamInstaller.repair()
+            nativeSteamStatus = NativeSteamCompatibilityStatus.inspect()
+        } catch {
+            lastError = "Couldn't repair Steam: \(error.localizedDescription)"
+        }
+    }
+
+    func nativePoster(for game: InstalledGame) async -> NSImage? {
+        if let existing = posterImages[game.id] { return existing }
+        let steam = SteamStore()
+        let data = await artworkCache.poster(
+            for: game,
+            remoteCandidates: steam.remoteArtworkCandidates(for: game),
+            localFallbacks: nativeSteamStore.localArtworkFallbacks(for: game)
+        )
+        guard let data, let image = NSImage(data: data) else { return nil }
+        posterImages[game.id] = image
+        return image
+    }
+
+    /// Clears custom/cached native-Steam artwork and reloads Valve's default.
+    func resetNativePoster(for game: InstalledGame) async {
+        await artworkCache.resetPoster(forGameID: game.id)
+        posterImages.removeValue(forKey: game.id)
+        _ = await nativePoster(for: game)
+    }
+
+    func showNativeGameLogs(for game: InstalledGame) {
+        let fm = FileManager.default
+        let logs = nativeSteamStore.diagnosticLogs(for: game).filter {
+            fm.fileExists(atPath: $0.path(percentEncoded: false))
+        }
+        guard !logs.isEmpty else {
+            lastError = "No logs exist for \"\(game.name)\" yet. Launch it once with Synthehol Steam Play, then try again."
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting(logs)
+    }
+
+    func showNativeSteamPlayLog() {
+        let log = nativeSteamStore.clientLog()
+        guard FileManager.default.fileExists(atPath: log.path(percentEncoded: false)) else {
+            lastError = "The Steam Play client log has not been created yet. Fully quit and reopen Steam after installing Synthehol Steam Play."
+            return
+        }
+        NSWorkspace.shared.open(log)
     }
 
     /// Repairs bottles configured by builds that installed only D3DMetal's
@@ -329,13 +627,12 @@ final class AppModel {
         d3dMetalOSSupported && gptkImported && runtimeSupportsD3DMetal
     }
 
-    /// Asks for the mounted GPTK volume (pre-selected when detected) and
-    /// imports its libraries.
+    /// Asks for the mounted supported GPTK 4 volume and imports its libraries.
     func importGPTK() async {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        panel.message = "Choose the mounted Game Porting Toolkit disk image from Apple's download (or its \"redist\" folder)."
+        panel.message = "Choose the mounted Game Porting Toolkit 4 beta 2 evaluation environment (or its \"redist\" folder)."
         panel.prompt = "Import"
         panel.directoryURL = D3DMetalSupport.mountedGPTKVolume()
             ?? URL(filePath: "/Volumes")
@@ -348,14 +645,17 @@ final class AppModel {
         }
     }
 
-    /// Installs the Wine 11.15 GPTK runtime used by both Steam and D3DMetal.
+    /// Installs the Wine 11.15 host runtime used by both Steam and GPTK 4.
     func installD3DMetalRuntime() async {
         await installRuntime(.gptkBeta)
     }
 
     // MARK: Bottles
 
-    func createBottle(name: String, windowsVersion: WindowsVersion) async {
+    func createBottle(
+        name: String, windowsVersion: WindowsVersion,
+        storageID: BottleStorage.ID = BottleStorage.defaultID
+    ) async {
         guard let executor else {
             lastError = "Install the runtime before creating a configuration."
             return
@@ -365,7 +665,9 @@ final class AppModel {
             return
         }
         do {
-            let bottle = try await bottleStore.create(name: name, windowsVersion: windowsVersion)
+            let bottle = try await bottleStore.create(
+                name: name, windowsVersion: windowsVersion, storageID: storageID
+            )
             bottles = await bottleStore.bottles()
             selectedBottleID = bottle.id
             busyBottleIDs.insert(bottle.id)
@@ -378,6 +680,25 @@ final class AppModel {
             await refresh()
         } catch {
             lastError = "Couldn't create configuration: \(error.localizedDescription)"
+        }
+    }
+
+    func addBottleStorage(name: String, url: URL) async {
+        do {
+            _ = try await bottleStore.addStorage(name: name, url: url)
+            bottleStorages = await bottleStore.storageLocations()
+            bottles = await bottleStore.bottles()
+        } catch {
+            lastError = "Couldn't add bottle storage: \(error.localizedDescription)"
+        }
+    }
+
+    func removeBottleStorage(_ storage: BottleStorage) async {
+        do {
+            try await bottleStore.removeStorage(id: storage.id)
+            bottleStorages = await bottleStore.storageLocations()
+        } catch {
+            lastError = "Couldn't remove bottle storage: \(error.localizedDescription)"
         }
     }
 
@@ -406,8 +727,10 @@ final class AppModel {
     func applySettings(_ settings: BottleSettings, to bottle: Bottle) async {
         var updated = bottle
         let oldVersion = bottle.settings.windowsVersion
+        let oldDrives = bottle.settings.drives
         updated.settings = settings
         do {
+            try BottleDriveManager.apply(previous: oldDrives, current: settings.drives, to: updated)
             try await bottleStore.update(updated)
             await refresh()
             guard let executor else { return }
@@ -491,6 +814,10 @@ final class AppModel {
     /// log opens in Console.app so output can be watched live.
     func launchGame(_ game: InstalledGame, in bottle: Bottle, debugLogging: Bool = false) {
         guard let executor else { return }
+        if game.store == CustomGameStore.storeID {
+            launchCustomGame(game, in: bottle, executor: executor, debugLogging: debugLogging)
+            return
+        }
         guard gameRunStates[game.id] == nil else { return } // already starting/running
         gameStateLog.log("\(game.name, privacy: .public): starting")
         gameRunStates[game.id] = .starting
@@ -509,6 +836,86 @@ final class AppModel {
         Task { [weak self] in
             await session.task.value
             self?.steamRunning.remove(bottle.id)
+            self?.refreshGames(in: bottle)
+        }
+    }
+
+    private func launchCustomGame(
+        _ game: InstalledGame, in bottle: Bottle, executor: WineExecutor,
+        debugLogging: Bool
+    ) {
+        guard gameRunStates[game.id] == nil,
+              let path = game.executablePath else { return }
+        let executable = URL(filePath: path)
+        guard FileManager.default.fileExists(atPath: path) else {
+            lastError = "The executable for \"\(game.name)\" could not be found."
+            return
+        }
+        let settings = GameSettings.load(for: game, in: bottle)
+        gameRunStates[game.id] = .starting
+        watchGame(game)
+        let extra = debugLogging
+            ? settings.environment.merging(["WINEDEBUG": "+timestamp,+pid,+tid,+seh,+module,+d3d,+dxgi"]) { _, new in new }
+            : settings.environment
+        let stream = executor.runProgram(
+            at: executable, arguments: settings.launchArgumentList,
+            bottle: bottle, waitForExit: true,
+            workingDirectory: game.workingDirectory.map { URL(filePath: $0) },
+            extraEnvironment: extra
+        )
+        Task { [weak self] in
+            do { for try await _ in stream {} }
+            catch { self?.lastError = "Couldn't launch \"\(game.name)\": \(error.localizedDescription)" }
+            self?.gameRunStates[game.id] = nil
+        }
+    }
+
+    func addCustomGame(
+        name: String, executable: URL, workingDirectory: URL, in bottle: Bottle
+    ) async -> Bool {
+        do {
+            _ = try CustomGameStore().add(
+                name: name, executable: executable,
+                workingDirectory: workingDirectory, in: bottle
+            )
+            refreshGames(in: bottle)
+            return true
+        } catch {
+            lastError = "Couldn't add game: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func renameCustomGame(_ game: InstalledGame, to name: String, in bottle: Bottle) {
+        do {
+            try CustomGameStore().rename(gameID: game.storeGameID, to: name, in: bottle)
+            refreshGames(in: bottle)
+        } catch {
+            lastError = "Couldn't rename game: \(error.localizedDescription)"
+        }
+    }
+
+    func removeCustomGame(_ game: InstalledGame, in bottle: Bottle) {
+        do {
+            try CustomGameStore().remove(gameID: game.storeGameID, in: bottle)
+            installedGames[bottle.id]?.removeAll { $0.id == game.id }
+        } catch {
+            lastError = "Couldn't remove game: \(error.localizedDescription)"
+        }
+    }
+
+    func runInstaller(_ installer: URL, in bottle: Bottle) {
+        guard let executor else { return }
+        guard !installerRunning.contains(bottle.id) else { return }
+        installerRunning.insert(bottle.id)
+        let stream = executor.runProgram(
+            at: installer, bottle: bottle, waitForExit: true,
+            workingDirectory: installer.deletingLastPathComponent()
+        )
+        Task { [weak self] in
+            defer { self?.installerRunning.remove(bottle.id) }
+            do { for try await _ in stream {} }
+            catch { self?.lastError = "Couldn't run installer: \(error.localizedDescription)" }
             self?.refreshGames(in: bottle)
         }
     }
@@ -600,16 +1007,55 @@ final class AppModel {
         NSWorkspace.shared.open(SyntheholPaths.logs)
     }
 
-    static let steamWebAPIKeyDefaultsKey = "steamWebAPIKey"
+    func addSteamWebAPIKey(name: String, key: String) -> String {
+        let profile = SteamWebAPIKeyProfile(
+            id: UUID().uuidString,
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Steam Key" : name.trimmingCharacters(in: .whitespacesAndNewlines),
+            key: key.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        steamWebAPIKeys.append(profile)
+        steamWebAPIKeys.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        saveSteamWebAPIKeys()
+        return profile.id
+    }
+
+    func removeSteamWebAPIKey(id: String) {
+        steamWebAPIKeys.removeAll { $0.id == id }
+        if nativeSteamWebAPIKeyID == id {
+            nativeSteamWebAPIKeyID = nil
+            nativeOwnedGames = []
+            nativeOwnedGamesError = nil
+        }
+        saveSteamWebAPIKeys()
+        for index in bottles.indices where bottles[index].settings.steamWebAPIKeyID == id {
+            bottles[index].settings.steamWebAPIKeyID = nil
+            try? bottles[index].saveSettings()
+            ownedGames[bottles[index].id] = []
+            ownedGamesError[bottles[index].id] = nil
+        }
+    }
+
+    func steamWebAPIKey(for bottle: Bottle) -> String? {
+        guard let id = bottle.settings.steamWebAPIKeyID else { return nil }
+        return steamWebAPIKeys.first { $0.id == id }?.key
+    }
+
+    private func saveSteamWebAPIKeys() {
+        guard let data = try? JSONEncoder().encode(steamWebAPIKeys) else { return }
+        UserDefaults.standard.set(data, forKey: Self.steamWebAPIKeysDefaultsKey)
+    }
 
     /// Loads the signed-in account's owned-but-not-installed games via the
     /// Steam Web API (needs the user's personal API key; set in the Library's
     /// Available to Install section).
     func refreshOwnedGames(in bottle: Bottle) async {
         guard bottle.settings.steamInstalled else { return }
-        let apiKey = (UserDefaults.standard.string(forKey: Self.steamWebAPIKeyDefaultsKey) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !apiKey.isEmpty else { return } // view shows key setup instead
+        guard let apiKey = steamWebAPIKey(for: bottle), !apiKey.isEmpty else {
+            ownedGames[bottle.id] = []
+            ownedGamesError[bottle.id] = nil
+            return
+        }
         guard let user = SteamStore().loginUsers(in: bottle).first else {
             ownedGamesError[bottle.id] = "Sign in to Steam once to see your library here."
             return
@@ -617,6 +1063,7 @@ final class AppModel {
         loadingOwnedGames.insert(bottle.id)
         defer { loadingOwnedGames.remove(bottle.id) }
         ownedGamesError[bottle.id] = nil
+        ownedGames[bottle.id] = []
         do {
             let owned = try await SteamOwnedGamesFetcher(apiKey: apiKey)
                 .ownedGames(steamID64: user.steamID64)
@@ -634,7 +1081,6 @@ final class AppModel {
                 }
         } catch SteamOwnedGamesFetcher.FetchError.invalidKey {
             ownedGamesError[bottle.id] = "Steam rejected the API key. Check it and try again."
-            UserDefaults.standard.removeObject(forKey: Self.steamWebAPIKeyDefaultsKey)
         } catch {
             ownedGamesError[bottle.id] = "Couldn't load your Steam library right now."
         }
@@ -868,7 +1314,11 @@ final class AppModel {
 
     /// Refreshes the installed-games list and keeps the steamapps watcher alive.
     func refreshGames(in bottle: Bottle) {
-        installedGames[bottle.id] = (try? SteamStore().installedGames(in: bottle)) ?? []
+        let steam = (try? SteamStore().installedGames(in: bottle)) ?? []
+        let custom = (try? CustomGameStore().installedGames(in: bottle)) ?? []
+        installedGames[bottle.id] = (steam + custom).sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
         // Newly installed games leave the available-to-install list.
         let installedIDs = Set((installedGames[bottle.id] ?? []).map(\.storeGameID))
         ownedGames[bottle.id]?.removeAll { installedIDs.contains($0.storeGameID) }
@@ -879,7 +1329,10 @@ final class AppModel {
     /// Fills `gameMetadata` for games that don't have it yet (disk-cached,
     /// so this is usually instant after first launch).
     private func loadMetadata(for games: [InstalledGame]) {
-        let missing = games.filter { gameMetadata[$0.id] == nil }
+        let missing = games.filter {
+            ($0.store == SteamStore.storeID || $0.store == NativeSteamStore.storeID)
+                && gameMetadata[$0.id] == nil
+        }
         guard !missing.isEmpty else { return }
         Task { [weak self, metadataStore] in
             for game in missing {
@@ -897,8 +1350,10 @@ final class AppModel {
         let store = SteamStore()
         let data = await artworkCache.poster(
             for: game,
-            remoteCandidates: store.remoteArtworkCandidates(for: game),
-            localFallbacks: store.localArtworkFallbacks(for: game, in: bottle)
+            remoteCandidates: game.store == SteamStore.storeID
+                ? store.remoteArtworkCandidates(for: game) : [],
+            localFallbacks: game.store == SteamStore.storeID
+                ? store.localArtworkFallbacks(for: game, in: bottle) : []
         )
         guard let data, let image = NSImage(data: data) else { return nil }
         posterImages[game.id] = image
@@ -920,7 +1375,6 @@ final class AppModel {
         guard let executor else { return }
         guard steamTransitions[bottle.id] == nil else { return }
         steamTransitions[bottle.id] = .stopping
-        defer { steamTransitions[bottle.id] = nil }
         let steam = SteamInstaller()
         await steam.requestExit(in: bottle, executor: executor)
         let deadline = ContinuousClock.now + .seconds(15)
@@ -929,16 +1383,25 @@ final class AppModel {
                 steamRunning.remove(bottle.id)
                 steamClientVisible.remove(bottle.id)
                 forgetSteamClientPID(for: bottle)
+                steamTransitions[bottle.id] = nil
                 return
             }
             try? await Task.sleep(for: .seconds(1))
         }
-        // Steam sometimes leaves its bootstrapper or WebHelper behind. The
-        // timeout makes Stop deterministic instead of leaving the UI wedged.
+        // Do not destroy the bottle's processes without another explicit user
+        // action. Surface Force Quit after graceful shutdown times out.
+        steamTransitions[bottle.id] = .stopTimedOut
+    }
+
+    func forceQuitSteam(in bottle: Bottle) async {
+        guard let executor,
+              steamTransitions[bottle.id] == .stopTimedOut else { return }
+        steamTransitions[bottle.id] = .stopping
         try? await executor.killBottle(bottle)
         steamRunning.remove(bottle.id)
         steamClientVisible.remove(bottle.id)
         forgetSteamClientPID(for: bottle)
+        steamTransitions[bottle.id] = nil
     }
 
     /// Stops everything in a bottle: graceful Steam exit first (if installed),

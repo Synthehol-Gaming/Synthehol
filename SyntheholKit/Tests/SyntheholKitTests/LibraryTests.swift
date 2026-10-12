@@ -67,6 +67,76 @@ struct GameSettingsTests {
         try GameSettings(nudgeStuckLoading: true).save(for: portal2, in: bottle)
         #expect(GameSettings.load(for: portal2, in: bottle).nudgeStuckLoading)
     }
+
+    @Test func roundtripsSettingsInStandaloneDirectory() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let directory = temp.appending(path: "NativeSteam/Game Settings")
+
+        let settings = GameSettings(nudgeStuckLoading: true)
+        try settings.save(for: portal2, in: directory)
+
+        #expect(GameSettings.load(for: portal2, in: directory) == settings)
+        #expect(GameSettings.fileURL(for: portal2, in: directory).lastPathComponent
+                == "steam-620.plist")
+    }
+}
+
+struct CustomGameStoreTests {
+    @Test func addsListsAndRemovesCustomGameWithoutTouchingExecutable() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "synthehol-custom-games-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bottle = try Bottle.create(name: "Custom", in: root)
+        let gameDirectory = root.appending(path: "Installed Game")
+        try FileManager.default.createDirectory(at: gameDirectory, withIntermediateDirectories: true)
+        let executable = gameDirectory.appending(path: "Play.exe")
+        FileManager.default.createFile(
+            atPath: executable.path(percentEncoded: false), contents: Data()
+        )
+
+        let store = CustomGameStore()
+        let added = try store.add(
+            name: "My Game", executable: executable,
+            workingDirectory: gameDirectory, in: bottle
+        )
+        let games = try store.installedGames(in: bottle)
+        #expect(games.count == 1)
+        #expect(games[0].name == "My Game")
+        #expect(games[0].executablePath == executable.path(percentEncoded: false))
+        #expect(games[0].workingDirectory == gameDirectory.path(percentEncoded: false))
+
+        try store.remove(gameID: added.id, in: bottle)
+        #expect(try store.installedGames(in: bottle).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: executable.path(percentEncoded: false)))
+    }
+
+    @Test func renamesGameKeepingIDAndPaths() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "synthehol-custom-games-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bottle = try Bottle.create(name: "Custom", in: root)
+        let gameDirectory = root.appending(path: "Installed Game")
+        try FileManager.default.createDirectory(at: gameDirectory, withIntermediateDirectories: true)
+        let executable = gameDirectory.appending(path: "Play.exe")
+
+        let store = CustomGameStore()
+        let added = try store.add(
+            name: "My Game", executable: executable,
+            workingDirectory: gameDirectory, in: bottle
+        )
+        try store.rename(gameID: added.id, to: "Better Name", in: bottle)
+
+        let games = try store.installedGames(in: bottle)
+        #expect(games.count == 1)
+        #expect(games[0].name == "Better Name")
+        #expect(games[0].storeGameID == added.id)
+        #expect(games[0].executablePath == executable.path(percentEncoded: false))
+
+        // Renaming a missing ID is a no-op, not an error.
+        try store.rename(gameID: "missing", to: "X", in: bottle)
+        #expect(try store.installedGames(in: bottle).count == 1)
+    }
 }
 
 struct GameNudgerTests {
@@ -103,6 +173,12 @@ struct SteamMetadataTests {
         #expect(SteamMetadataStore.parse(fixture, appID: "999") == nil)
         let failure = Data(#"{"620": {"success": false}}"#.utf8)
         #expect(SteamMetadataStore.parse(failure, appID: "620") == nil)
+    }
+
+    @Test func detectsVRFromSteamCategories() {
+        #expect(SteamAppMetadata(categories: ["VR Supported"]).supportsVR)
+        #expect(SteamAppMetadata(categories: ["VR Only"]).supportsVR)
+        #expect(!SteamAppMetadata(categories: ["Single-player", "Co-op"]).supportsVR)
     }
 
     @Test func servesFromDiskCacheWithoutNetwork() async throws {

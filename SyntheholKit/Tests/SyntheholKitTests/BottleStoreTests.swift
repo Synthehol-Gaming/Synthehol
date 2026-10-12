@@ -14,6 +14,47 @@ private func makeStoreEnvironment() throws -> (store: BottleStore, root: URL) {
 }
 
 struct BottleStoreTests {
+    @Test func driveMappingsCreateAndRemoveWineLinks() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "synthehol-drives-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bottle = try Bottle.create(name: "Mapped", in: root)
+        let shared = root.appending(path: "Shared")
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        let drive = BottleDrive(letter: "D", url: shared)
+
+        try BottleDriveManager.apply(previous: [], current: [drive], to: bottle)
+        let link = URL(
+            fileURLWithPath: bottle.url.path(percentEncoded: false) + "/dosdevices/d:",
+            isDirectory: false
+        )
+        #expect(
+            try FileManager.default.destinationOfSymbolicLink(
+                atPath: link.path(percentEncoded: false)
+            ) == shared.path(percentEncoded: false) + "/"
+        )
+
+        try BottleDriveManager.apply(previous: [drive], current: [], to: bottle)
+        #expect(!FileManager.default.fileExists(atPath: link.path(percentEncoded: false)))
+    }
+
+    @Test func detectsWineManagedDriveLettersWithoutTreatingDeviceLinksAsDrives() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "synthehol-occupied-drives-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bottle = try Bottle.create(name: "Occupied", in: root)
+        let dosDevices = bottle.url.appending(path: "dosdevices")
+        try FileManager.default.createDirectory(at: dosDevices, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            atPath: dosDevices.path() + "/d:", withDestinationPath: "/Volumes/Games"
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: dosDevices.path() + "/e::", withDestinationPath: "/dev/rdisk1"
+        )
+
+        #expect(BottleDriveManager.occupiedLetters(in: bottle) == ["D"])
+    }
+
     @Test func createRegistersAndListsSortedByName() async throws {
         let (store, root) = try makeStoreEnvironment()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -95,5 +136,21 @@ struct BottleStoreTests {
         try FileManager.default.createDirectory(at: bottle.url, withIntermediateDirectories: true)
         try bottle.saveSettings()
         #expect(await store.bottles().map(\.settings.name) == ["Ejected"])
+    }
+
+    @Test func createsAndDiscoversConfigurationsInNamedStorage() async throws {
+        let (store, root) = try makeStoreEnvironment()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let external = root.appending(path: "External Games")
+        let storage = try await store.addStorage(name: "External", url: external)
+        let bottle = try await store.create(name: "Elsewhere", storageID: storage.id)
+
+        #expect(bottle.url.deletingLastPathComponent().canonicalPath == external.canonicalPath)
+        #expect(await store.storageLocations().map(\.name) == ["Built-in", "External"])
+
+        try await store.removeStorage(id: storage.id)
+        #expect(FileManager.default.fileExists(atPath: bottle.url.path(percentEncoded: false)))
+        #expect(await store.bottles().map(\.settings.name) == ["Elsewhere"])
     }
 }

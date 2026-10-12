@@ -9,18 +9,23 @@ public struct InstalledGame: Sendable, Equatable, Identifiable {
     public var name: String
     public var posterURL: URL?
     public var installPath: String?
+    public var executablePath: String?
+    public var workingDirectory: String?
 
     public var id: String { "\(store):\(storeGameID)" }
 
     public init(
         store: String, storeGameID: String, name: String,
-        posterURL: URL? = nil, installPath: String? = nil
+        posterURL: URL? = nil, installPath: String? = nil,
+        executablePath: String? = nil, workingDirectory: String? = nil
     ) {
         self.store = store
         self.storeGameID = storeGameID
         self.name = name
         self.posterURL = posterURL
         self.installPath = installPath
+        self.executablePath = executablePath
+        self.workingDirectory = workingDirectory
     }
 }
 

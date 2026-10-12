@@ -43,9 +43,13 @@ public struct GameSettings: Codable, Equatable, Sendable {
     // MARK: Persistence
 
     static func fileURL(for game: InstalledGame, in bottle: Bottle) -> URL {
+        fileURL(for: game, in: bottle.url.appending(path: "Game Settings"))
+    }
+
+    public static func fileURL(for game: InstalledGame, in directory: URL) -> URL {
         let safeID = game.id.replacingOccurrences(of: ":", with: "-")
             .replacingOccurrences(of: "/", with: "_")
-        return bottle.url.appending(path: "Game Settings/\(safeID).plist")
+        return directory.appending(path: "\(safeID).plist")
     }
 
     public static func load(for game: InstalledGame, in bottle: Bottle) -> GameSettings {
@@ -58,7 +62,20 @@ public struct GameSettings: Codable, Equatable, Sendable {
     }
 
     public func save(for game: InstalledGame, in bottle: Bottle) throws {
-        let url = Self.fileURL(for: game, in: bottle)
+        try save(for: game, in: bottle.url.appending(path: "Game Settings"))
+    }
+
+    public static func load(for game: InstalledGame, in directory: URL) -> GameSettings {
+        guard let data = FileManager.default.contents(
+            atPath: fileURL(for: game, in: directory).path(percentEncoded: false)
+        ),
+        let settings = try? PropertyListDecoder().decode(GameSettings.self, from: data)
+        else { return GameSettings() }
+        return settings
+    }
+
+    public func save(for game: InstalledGame, in directory: URL) throws {
+        let url = Self.fileURL(for: game, in: directory)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )

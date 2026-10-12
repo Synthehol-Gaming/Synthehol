@@ -15,6 +15,10 @@ extension SteamStore {
     /// after sign-in), most-recent first.
     public func loginUsers(in bottle: Bottle) -> [SteamUser] {
         let vdfURL = steamDirectory(in: bottle).appending(path: "config/loginusers.vdf")
+        return Self.loginUsers(at: vdfURL)
+    }
+
+    static func loginUsers(at vdfURL: URL) -> [SteamUser] {
         guard let text = try? String(contentsOf: vdfURL, encoding: .utf8),
               let root = try? ValveKeyValues.parse(text),
               case .object(let users)? = root["users"]
@@ -29,6 +33,13 @@ extension SteamStore {
             )
         }
         .sorted { $0.mostRecent && !$1.mostRecent }
+    }
+}
+
+extension NativeSteamStore {
+    /// Accounts known to the native macOS Steam client, most-recent first.
+    public func loginUsers() -> [SteamUser] {
+        SteamStore.loginUsers(at: steamRoot.appending(path: "config/loginusers.vdf"))
     }
 }
 

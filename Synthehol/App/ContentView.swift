@@ -21,7 +21,9 @@ struct ContentView: View {
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 220)
         } detail: {
-            if let bottle = model.selectedBottle {
+            if model.nativeSteamSelected {
+                NativeSteamView(showCreateSheet: $showCreateSheet)
+            } else if let bottle = model.selectedBottle {
                 BottleDetailView(bottle: bottle, showCreateSheet: $showCreateSheet)
                     .id(bottle.id) // reset draft state when switching bottles
             } else {
@@ -44,9 +46,21 @@ struct ContentView: View {
             "Something went wrong",
             isPresented: Binding(
                 get: { model.lastError != nil },
-                set: { if !$0 { model.lastError = nil } }
+                set: {
+                    if !$0 {
+                        model.lastError = nil
+                        model.needsAppManagementPermission = false
+                    }
+                }
             )
         ) {
+            if model.needsAppManagementPermission {
+                Button("Open System Settings") {
+                    model.openAppManagementSettings()
+                    model.lastError = nil
+                    model.needsAppManagementPermission = false
+                }
+            }
             Button("OK") { model.lastError = nil }
         } message: {
             Text(model.lastError ?? "")

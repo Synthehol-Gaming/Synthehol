@@ -7,6 +7,7 @@ struct CreateBottleSheet: View {
 
     @State private var name = Self.defaultName(for: .win10)
     @State private var windowsVersion: WindowsVersion = .win10
+    @State private var storageID = BottleStorage.defaultID
 
     private static func defaultName(for version: WindowsVersion) -> String {
         "Steam on \(version.shortName)"
@@ -28,6 +29,15 @@ struct CreateBottleSheet: View {
                         Text($0.displayName).tag($0)
                     }
                 }
+                Picker("Bottle Storage", selection: $storageID) {
+                    ForEach(model.bottleStorages) { storage in
+                        Text(storage.name).tag(storage.id)
+                    }
+                }
+                Text(model.bottleStorages.first(where: { $0.id == storageID })?.url.path(percentEncoded: false) ?? "")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
             .formStyle(.grouped)
             // The generated name tracks the version picker until the user
@@ -45,8 +55,14 @@ struct CreateBottleSheet: View {
                 Button("Create") {
                     let bottleName = name.trimmingCharacters(in: .whitespaces)
                     let version = windowsVersion
+                    let selectedStorageID = storageID
                     dismiss()
-                    Task { await model.createBottle(name: bottleName, windowsVersion: version) }
+                    Task {
+                        await model.createBottle(
+                            name: bottleName, windowsVersion: version,
+                            storageID: selectedStorageID
+                        )
+                    }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || model.runtime == nil)

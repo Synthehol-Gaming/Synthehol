@@ -1,4 +1,5 @@
 import SwiftUI
+import SyntheholKit
 
 enum AppAppearance: String, CaseIterable, Identifiable {
     case system, light, dark
@@ -32,24 +33,165 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 }
 
 struct SettingsView: View {
+    @Environment(AppModel.self) private var model
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    @State private var storageToRemove: BottleStorage?
 
     var body: some View {
-        Form {
-            Picker("Appearance", selection: $appearance) {
-                ForEach(AppAppearance.allCases) { option in
-                    Text(option.label).tag(option.rawValue)
-                }
-            }
-            .pickerStyle(.segmented)
-            Text("System follows your macOS appearance automatically.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        TabView {
+            generalPane
+                .tabItem { Label("General", systemImage: "gearshape") }
+
+            storagePane
+                .tabItem { Label("Bottle Storage", systemImage: "externaldrive") }
         }
-        .padding(20)
-        .frame(width: 360)
+        .frame(width: 600, height: 390)
         .onChange(of: appearance) {
             AppAppearance.applyStored()
         }
+        .task {
+            if model.bottleStorages.isEmpty { await model.refresh() }
+        }
+        .confirmationDialog(
+            "Remove Bottle Storage?", item: $storageToRemove
+        ) { storage in
+            Button("Remove \(storage.name)", role: .destructive) {
+                Task { await model.removeBottleStorage(storage) }
+            }
+        } message: { storage in
+            Text("The folder and configurations inside it will remain on disk.")
+        }
+    }
+
+    private var generalPane: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text("General")
+                .font(.title2.bold())
+
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
+                GridRow {
+                    Text("Appearance")
+                        .gridColumnAlignment(.trailing)
+                    Picker("Appearance", selection: $appearance) {
+                        ForEach(AppAppearance.allCases) { option in
+                            Text(option.label).tag(option.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 260)
+                }
+                GridRow {
+                    Color.clear.frame(width: 1, height: 1)
+                    Text("System follows your macOS appearance automatically.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(28)
+    }
+
+    private var storagePane: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Bottle Storage")
+                    .font(.title2.bold())
+                Text("Choose where configurations and their installed games are stored.")
+                    .foregroundStyle(.secondary)
+            }
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(model.bottleStorages.enumerated()), id: \.element.id) { index, storage in
+                        storageRow(storage)
+                        if index < model.bottleStorages.count - 1 { Divider() }
+                    }
+                }
+            }
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 9))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(.separator, lineWidth: 1)
+            }
+
+            HStack {
+                Button {
+                    chooseStorageFolder()
+                } label: {
+                    Label("Add Storage…", systemImage: "plus")
+                }
+
+                Spacer()
+
+                Text("Removing storage never deletes its files.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(24)
+    }
+
+    private func storageRow(_ storage: BottleStorage) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: storage.id == BottleStorage.defaultID ? "internaldrive" : "externaldrive")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 7) {
+                    Text(storage.name).fontWeight(.medium)
+                    if storage.id == BottleStorage.defaultID {
+                        Text("DEFAULT")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(.quaternary, in: Capsule())
+                    }
+                }
+                Text(storage.url.path(percentEncoded: false))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(storage.url.path(percentEncoded: false))
+            }
+
+            Spacer(minLength: 12)
+
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([storage.url])
+            } label: {
+                Image(systemName: "folder")
+            }
+            .buttonStyle(.borderless)
+            .help("Show in Finder")
+
+            if storage.id != BottleStorage.defaultID {
+                Button(role: .destructive) {
+                    storageToRemove = storage
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Remove this storage location")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    private func chooseStorageFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Use for Bottle Storage"
+        panel.message = "Choose a folder where Synthehol will create configurations."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await model.addBottleStorage(name: url.lastPathComponent, url: url) }
     }
 }

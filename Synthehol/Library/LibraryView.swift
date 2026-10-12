@@ -9,9 +9,7 @@ struct LibraryView: View {
     @State private var settingsGame: InstalledGame?
     @State private var artworkGame: InstalledGame?
     @State private var uninstallCandidate: InstalledGame?
-    @AppStorage(AppModel.steamWebAPIKeyDefaultsKey) var steamWebAPIKey = ""
-    @State private var apiKeyDraft = ""
-
+    @State private var showingAddGame = false
     private var allGames: [InstalledGame] { model.installedGames[bottle.id] ?? [] }
 
     /// Installed games matching the sidebar filter. Games whose metadata
@@ -27,31 +25,55 @@ struct LibraryView: View {
 
     var body: some View {
         Group {
-            if !bottle.settings.steamInstalled {
+            if !bottle.settings.steamInstalled && allGames.isEmpty {
                 ContentUnavailableView {
-                    Label("Steam Not Installed", systemImage: "square.and.arrow.down")
+                    Label("No Games Yet", systemImage: "gamecontroller")
                 } description: {
-                    Text("Install Steam to sign in and build your game library.")
+                    Text("Add an installed Windows game, run an installer, or install Steam.")
                 } actions: {
-                    if let progress = model.steamProgress[bottle.id] {
-                        SteamProgressView(progress: progress)
-                            .frame(maxWidth: 320)
+                    if model.installerRunning.contains(bottle.id) {
+                        ProgressView("Installer Running…")
                     } else {
-                        Button("Install Steam") {
-                            Task { await model.installSteam(in: bottle) }
+                      HStack {
+                        Button("Add Game…") { showingAddGame = true }
+                            .buttonStyle(.borderedProminent)
+                        Button("Run Installer…") { chooseInstaller() }
+                        if let progress = model.steamProgress[bottle.id] {
+                            SteamProgressView(progress: progress).frame(maxWidth: 260)
+                        } else {
+                            Button("Install Steam") {
+                                Task { await model.installSteam(in: bottle) }
+                            }
+                            .disabled(model.runtime == nil || !bottle.prefixExists)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.runtime == nil || !bottle.prefixExists)
-                        if !bottle.prefixExists {
-                            Text("This configuration is still initializing…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                      }
                     }
                 }
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
+                        HStack {
+                            Text("Games").font(.title2.bold())
+                            Spacer()
+                            if model.installerRunning.contains(bottle.id) {
+                                HStack(spacing: 7) {
+                                    ProgressView().controlSize(.small)
+                                    Text("Installer Running…")
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else {
+                                Menu {
+                                    Button("Add Game…", systemImage: "plus") {
+                                        showingAddGame = true
+                                    }
+                                    Button("Run Installer…", systemImage: "shippingbox") {
+                                        chooseInstaller()
+                                    }
+                                } label: {
+                                    Label("Add", systemImage: "plus")
+                                }
+                            }
+                        }
                         if allGames.isEmpty {
                             VStack(spacing: 10) {
                                 Label("No Games Installed", systemImage: "gamecontroller")
@@ -94,13 +116,13 @@ struct LibraryView: View {
 
                         // Install-browsing belongs to the unfiltered view;
                         // owned-but-not-installed games have no metadata yet.
-                        if model.selectedGameFilter == .all {
+                        if bottle.settings.steamInstalled && model.selectedGameFilter == .all {
                             availableSection
                         }
                     }
                     .padding(20)
                 }
-                .task(id: bottle.id) {
+                .task(id: "\(bottle.id)|\(bottle.settings.steamWebAPIKeyID ?? "none")") {
                     await model.refreshOwnedGames(in: bottle)
                 }
             }
@@ -111,6 +133,9 @@ struct LibraryView: View {
         .sheet(item: $artworkGame) { game in
             ArtworkSheet(game: game, bottle: bottle)
         }
+        .sheet(isPresented: $showingAddGame) {
+            AddCustomGameSheet(bottle: bottle)
+        }
         .confirmationDialog(
             "Uninstall \"\(uninstallCandidate?.name ?? "")\"?",
             isPresented: Binding(
@@ -118,16 +143,124 @@ struct LibraryView: View {
                 set: { if !$0 { uninstallCandidate = nil } }
             )
         ) {
-            Button("Uninstall via Steam", role: .destructive) {
+            Button(
+                uninstallCandidate?.store == CustomGameStore.storeID
+                    ? "Remove from Library" : "Uninstall via Steam",
+                role: .destructive
+            ) {
                 if let game = uninstallCandidate {
-                    model.uninstallGame(game, in: bottle)
+                    if game.store == CustomGameStore.storeID {
+                        model.removeCustomGame(game, in: bottle)
+                    } else {
+                        model.uninstallGame(game, in: bottle)
+                    }
                 }
                 uninstallCandidate = nil
             }
             Button("Cancel", role: .cancel) { uninstallCandidate = nil }
         } message: {
-            Text("Steam will open and ask you to confirm. Steam removes the game's files; the tile disappears once the uninstall completes.")
+            if uninstallCandidate?.store == CustomGameStore.storeID {
+                Text("This only removes the library entry. The game and its files will remain on disk.")
+            } else {
+                Text("Steam will open and ask you to confirm. Steam removes the game's files; the tile disappears once the uninstall completes.")
+            }
         }
+    }
+
+    private func chooseInstaller() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.item]
+        panel.prompt = "Run Installer"
+        panel.message = "Choose a Windows installer to run inside \(bottle.settings.name)."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        model.runInstaller(url, in: bottle)
+    }
+}
+
+struct AddCustomGameSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let bottle: Bottle
+
+    @State private var name = ""
+    @State private var executable: URL?
+    @State private var workingDirectory: URL?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Add Game").font(.title2.bold())
+            Form {
+                TextField("Title", text: $name, prompt: Text("Game title"))
+                LabeledContent("Executable") {
+                    pathChooser(url: executable, title: "Choose Executable…") {
+                        chooseExecutable()
+                    }
+                }
+                LabeledContent("Working Directory") {
+                    pathChooser(url: workingDirectory, title: "Choose Folder…") {
+                        chooseWorkingDirectory()
+                    }
+                }
+                Text("The working directory defaults to the executable's folder. Launch arguments and artwork can be configured from the game tile afterward.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .formStyle(.grouped)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Add Game") {
+                    guard let executable else { return }
+                    let directory = workingDirectory ?? executable.deletingLastPathComponent()
+                    Task {
+                        if await model.addCustomGame(
+                            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                            executable: executable, workingDirectory: directory, in: bottle
+                        ) { dismiss() }
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || executable == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 560)
+    }
+
+    private func pathChooser(url: URL?, title: String, action: @escaping () -> Void) -> some View {
+        HStack {
+            Text(url?.path(percentEncoded: false) ?? "Not selected")
+                .foregroundStyle(url == nil ? .secondary : .primary)
+                .lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: 290, alignment: .trailing)
+            Button(title, action: action)
+        }
+    }
+
+    private func chooseExecutable() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.prompt = "Choose Executable"
+        panel.message = "Choose the Windows executable for this game."
+        panel.directoryURL = bottle.driveC
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        executable = url
+        workingDirectory = url.deletingLastPathComponent()
+        if name.isEmpty { name = url.deletingPathExtension().lastPathComponent }
+    }
+
+    private func chooseWorkingDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.prompt = "Choose Folder"
+        panel.directoryURL = workingDirectory ?? executable?.deletingLastPathComponent() ?? bottle.driveC
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        workingDirectory = url
     }
 }
 
@@ -147,9 +280,9 @@ extension LibraryView {
                     Task { await model.refreshOwnedGames(in: bottle) }
                 }
                 .labelStyle(.iconOnly)
-                .disabled(steamWebAPIKey.isEmpty)
+                .disabled(model.steamWebAPIKey(for: bottle) == nil)
             }
-            if steamWebAPIKey.isEmpty {
+            if model.steamWebAPIKey(for: bottle) == nil {
                 apiKeySetup
             } else if let error = model.ownedGamesError[bottle.id] {
                 Text(error)
@@ -176,20 +309,11 @@ extension LibraryView {
     @ViewBuilder
     var apiKeySetup: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Browse your whole Steam library here — installed or not — with a free Steam Web API key (one-time setup; works even if your profile is private).")
+            Text("Choose or add a Steam Web API key in this configuration’s Settings to browse the signed-in account’s complete library.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            HStack {
-                SecureField("Paste your Steam Web API key", text: $apiKeyDraft)
-                    .frame(maxWidth: 300)
-                Button("Save") {
-                    steamWebAPIKey = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    Task { await model.refreshOwnedGames(in: bottle) }
-                }
-                .disabled(apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button("Get a Key…") {
-                    NSWorkspace.shared.open(URL(string: "https://steamcommunity.com/dev/apikey")!)
-                }
+            Button("Get a Key…") {
+                NSWorkspace.shared.open(URL(string: "https://steamcommunity.com/dev/apikey")!)
             }
             Text("Steam's key page asks for a “domain name” — it's only a label and is never checked. Enter anything, e.g. localhost.")
                 .font(.caption)
@@ -368,7 +492,10 @@ struct GameTile: View {
                 Task { await model.exportLauncher(for: game, in: bottle) }
             }
             Divider()
-            Button("Uninstall…", role: .destructive) { onUninstall() }
+            Button(
+                game.store == CustomGameStore.storeID ? "Remove from Library…" : "Uninstall…",
+                role: .destructive
+            ) { onUninstall() }
         }
         .help(game.name)
     }
@@ -405,14 +532,23 @@ struct GameTile: View {
 }
 
 /// Per-game launch arguments and environment variables.
+/// Custom games can also be renamed here; only the display name changes —
+/// artwork and per-game settings are keyed by the game's stable ID.
 struct GameSettingsSheet: View {
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let game: InstalledGame
     let bottle: Bottle
 
+    @State private var name = ""
     @State private var launchArguments = ""
     @State private var environmentText = ""
     @State private var nudgeStuckLoading = false
+
+    private var isCustomGame: Bool { game.store == CustomGameStore.storeID }
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -420,6 +556,9 @@ struct GameSettingsSheet: View {
                 .font(.title3.bold())
 
             Form {
+                if isCustomGame {
+                    TextField("Title", text: $name, prompt: Text("Game title"))
+                }
                 TextField("Launch Arguments", text: $launchArguments,
                           prompt: Text("e.g. -novid -fullscreen"))
             }
@@ -450,6 +589,7 @@ struct GameSettingsSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(isCustomGame && trimmedName.isEmpty)
             }
         }
         .padding(20)
@@ -458,6 +598,7 @@ struct GameSettingsSheet: View {
     }
 
     private func load() {
+        name = game.name
         let settings = GameSettings.load(for: game, in: bottle)
         launchArguments = settings.launchArguments
         nudgeStuckLoading = settings.nudgeStuckLoading
@@ -481,5 +622,8 @@ struct GameSettingsSheet: View {
             nudgeStuckLoading: nudgeStuckLoading
         )
         try? settings.save(for: game, in: bottle)
+        if isCustomGame && trimmedName != game.name {
+            model.renameCustomGame(game, to: trimmedName, in: bottle)
+        }
     }
 }

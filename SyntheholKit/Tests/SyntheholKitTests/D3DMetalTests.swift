@@ -10,12 +10,19 @@ private func makeTempDirectory() throws -> URL {
 }
 
 /// Builds a fake GPTK `redist` layout with the files the importer validates.
-private func makeFakeGPTK(at root: URL) throws {
+private func makeFakeGPTK(at root: URL, version: String = "4.0b2") throws {
     let fm = FileManager.default
     let wine = root.appending(path: "redist/lib/wine/x86_64-windows")
     let external = root.appending(path: "redist/lib/external")
     try fm.createDirectory(at: wine, withIntermediateDirectories: true)
     try fm.createDirectory(at: external, withIntermediateDirectories: true)
+    let resources = external.appending(path: "D3DMetal.framework/Resources")
+    try fm.createDirectory(at: resources, withIntermediateDirectories: true)
+    let plist = try PropertyListSerialization.data(
+        fromPropertyList: ["CFBundleShortVersionString": version],
+        format: .xml, options: 0
+    )
+    try plist.write(to: resources.appending(path: "Info.plist"))
     for dll in ["d3d11.dll", "d3d12.dll", "dxgi.dll"] {
         try Data("fake-\(dll)".utf8).write(to: wine.appending(path: dll))
     }
@@ -52,6 +59,20 @@ struct D3DMetalSupportTests {
         await #expect(throws: D3DMetalSupport.ImportError.self) {
             try await D3DMetalSupport.importGPTK(from: temp.appending(path: "nowhere"))
         }
+    }
+
+    @Test func rejectsGPTK4Beta1() async throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        try makeFakeGPTK(at: temp.appending(path: "GPTK Beta"), version: "4.0b1")
+        let saved = D3DMetalSupport.importDirectory
+        defer { D3DMetalSupport.importDirectory = saved }
+        D3DMetalSupport.importDirectory = temp.appending(path: "Imported")
+
+        await #expect(throws: D3DMetalSupport.ImportError.self) {
+            try await D3DMetalSupport.importGPTK(from: temp.appending(path: "GPTK Beta"))
+        }
+        #expect(!D3DMetalSupport.isImported)
     }
 
     /// Apple's outer GPTK volume carries the libraries inside a nested

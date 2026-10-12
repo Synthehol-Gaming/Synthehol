@@ -12,6 +12,9 @@ struct BottleDetailView: View {
     @State private var draft: BottleSettings
     @State private var showDeleteDialog = false
     @State private var showRenameSheet = false
+    @State private var newSteamKeyName = ""
+    @State private var newSteamKeyValue = ""
+    @State private var newDriveLetter = "D"
 
     init(bottle: Bottle, showCreateSheet: Binding<Bool>) {
         self.bottle = bottle
@@ -35,7 +38,7 @@ struct BottleDetailView: View {
                 Menu {
                     Picker("Configuration", selection: Binding(
                         get: { bottle.id },
-                        set: { model.selectedBottleID = $0 }
+                        set: { model.selectBottle($0) }
                     )) {
                         ForEach(model.bottles) { candidate in
                             Text(candidate.settings.name).tag(candidate.id)
@@ -43,6 +46,9 @@ struct BottleDetailView: View {
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
+                    Button("Mac Steam", systemImage: "apple.logo") {
+                        model.selectNativeSteam()
+                    }
                     Divider()
                     Button("New Configuration…") { showCreateSheet = true }
                 } label: {
@@ -61,16 +67,23 @@ struct BottleDetailView: View {
             if bottle.settings.steamInstalled {
                 ToolbarItemGroup(placement: .primaryAction) {
                     if let transition = model.steamTransitions[bottle.id] {
-                        Button {} label: {
-                            HStack(spacing: 6) {
-                                ProgressView().controlSize(.small)
-                                Text(transition == .starting ? "Starting Steam" : "Stopping Steam")
+                        if transition == .stopTimedOut {
+                            Button("Force Quit Steam", systemImage: "xmark.octagon.fill", role: .destructive) {
+                                Task { await model.forceQuitSteam(in: bottle) }
                             }
+                            .help("Steam did not quit within 15 seconds. Force-stop every process in this configuration.")
+                        } else {
+                            Button {} label: {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small)
+                                    Text(transition == .starting ? "Starting Steam" : "Stopping Steam")
+                                }
+                            }
+                            .disabled(true)
+                            .help(transition == .starting
+                                ? "Waiting for Steam to start (45-second timeout)."
+                                : "Waiting for Steam to quit (15-second timeout).")
                         }
-                        .disabled(true)
-                        .help(transition == .starting
-                            ? "Waiting for Steam to start (45-second timeout)."
-                            : "Waiting for Steam to quit (15-second timeout).")
                     } else if model.steamRunning.contains(bottle.id) {
                         Button(
                             model.steamClientVisible.contains(bottle.id)
@@ -109,7 +122,7 @@ struct BottleDetailView: View {
             "Delete \"\(bottle.settings.name)\"?",
             isPresented: $showDeleteDialog
         ) {
-            Button("Move Files to Trash & Forget", role: .destructive) {
+            Button("Delete Files and Forget", role: .destructive) {
                 Task { await model.deleteBottle(bottle, deleteFiles: true) }
             }
             Button("Forget Only (Keep Files)") {
@@ -186,12 +199,57 @@ struct BottleDetailView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Drives") {
+                ForEach(draft.drives) { drive in
+                    HStack(spacing: 10) {
+                        Text("\(drive.letter):")
+                            .font(.body.monospaced().bold())
+                            .frame(width: 28, alignment: .leading)
+                        Image(systemName: "folder")
+                            .foregroundStyle(.secondary)
+                        Text(drive.url.path(percentEncoded: false))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(drive.url.path(percentEncoded: false))
+                        Spacer()
+                        Button {
+                            NSWorkspace.shared.activateFileViewerSelecting([drive.url])
+                        } label: {
+                            Image(systemName: "arrow.forward.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Show in Finder")
+                        Button(role: .destructive) {
+                            draft.drives.removeAll { $0.id == drive.id }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Remove drive mapping")
+                    }
+                }
+
+                HStack {
+                    Picker("Drive Letter", selection: $newDriveLetter) {
+                        ForEach(unusedDriveLetters, id: \.self) { letter in
+                            Text("\(letter):").tag(letter)
+                        }
+                    }
+                    .frame(width: 150)
+                    Button("Choose Folder…") { chooseDriveFolder() }
+                        .disabled(unusedDriveLetters.isEmpty)
+                }
+                Text("Adds a Windows drive that points directly to a folder on this Mac. The folder is not copied, and the same folder can be used by multiple configurations.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Graphics") {
                 Picker("Backend", selection: $draft.graphicsBackend) {
                     Text("DXMT").tag(GraphicsBackend.dxmt)
                     Text("DXVK").tag(GraphicsBackend.dxvk)
                     if model.d3dMetalOSSupported {
-                        Text("D3DMetal (Pre-release)").tag(GraphicsBackend.d3dMetal)
+                        Text("D3DMetal (GPTK 4)").tag(GraphicsBackend.d3dMetal)
                             .selectionDisabled(!model.d3dMetalReady)
                     }
                 }
@@ -233,6 +291,45 @@ struct BottleDetailView: View {
                 steamSection
             }
 
+            Section("Steam Web API") {
+                Picker("Library Key", selection: $draft.steamWebAPIKeyID) {
+                    Text("None").tag(String?.none)
+                    ForEach(model.steamWebAPIKeys) { profile in
+                        Text(profile.displayName).tag(String?.some(profile.id))
+                    }
+                }
+
+                HStack {
+                    TextField("Key name", text: $newSteamKeyName)
+                        .frame(maxWidth: 180)
+                    SecureField("Steam Web API key", text: $newSteamKeyValue)
+                    Button("Add") {
+                        let id = model.addSteamWebAPIKey(
+                            name: newSteamKeyName, key: newSteamKeyValue
+                        )
+                        draft.steamWebAPIKeyID = id
+                        newSteamKeyName = ""
+                        newSteamKeyValue = ""
+                    }
+                    .disabled(newSteamKeyValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                HStack {
+                    Button("Get a Key…") {
+                        NSWorkspace.shared.open(URL(string: "https://steamcommunity.com/dev/apikey")!)
+                    }
+                    if let selected = draft.steamWebAPIKeyID {
+                        Button("Delete Selected Key", role: .destructive) {
+                            model.removeSteamWebAPIKey(id: selected)
+                            draft.steamWebAPIKeyID = nil
+                        }
+                    }
+                }
+                Text("Keys are saved once and can be selected by multiple configurations. Each configuration still uses its own signed-in Steam account, so configurations can show different libraries even when they share a key. Steam’s key page accepts any label for its “domain name,” such as localhost.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Advanced") {
                 HStack {
                     ForEach(WineExecutor.WineTool.allCases, id: \.self) { tool in
@@ -258,17 +355,41 @@ struct BottleDetailView: View {
         .formStyle(.grouped)
     }
 
-    /// D3DMetal prerequisite status and setup actions. Shown only on macOS
-    /// releases that support the GPTK pre-release.
+    private var unusedDriveLetters: [String] {
+        let managed = Set(draft.drives.map { $0.letter.uppercased() })
+        // Managed links appear in dosdevices too, but only unmanaged Wine or
+        // mounted-volume links should block a new mapping.
+        let occupied = BottleDriveManager.occupiedLetters(in: bottle).subtracting(managed)
+        return BottleDriveManager.availableLetters.filter {
+            !managed.contains($0) && !occupied.contains($0)
+        }
+    }
+
+    private func chooseDriveFolder() {
+        guard let letter = unusedDriveLetters.contains(newDriveLetter)
+            ? newDriveLetter : unusedDriveLetters.first
+        else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Map as \(letter):"
+        panel.message = "Choose the Mac folder to make available as drive \(letter): in this configuration."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        draft.drives.append(BottleDrive(letter: letter, url: url))
+        newDriveLetter = unusedDriveLetters.first ?? "D"
+    }
+
+    /// D3DMetal prerequisite status and setup actions for GPTK 4.
     @ViewBuilder
     private var d3dMetalSetup: some View {
         if model.d3dMetalReady {
-            Text("D3DMetal translates Direct3D 9–12 via Apple's Game Porting Toolkit — best for Direct3D 12 games neither DXMT nor DXVK can run. Steam's own web interface uses app-local DXVK, while games continue to use D3DMetal. Pre-release: expect rough edges.")
+            Text("D3DMetal translates Direct3D 9–12 through Apple's Game Porting Toolkit 4 and Metal 4. Steam's own web interface uses app-local DXVK, while games continue to use D3DMetal.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Text("D3DMetal (Apple's Game Porting Toolkit, Direct3D 9–12) needs two one-time steps before it can be selected:")
+                Text("D3DMetal (Game Porting Toolkit 4 beta 2, Direct3D 9–12) needs two one-time steps before it can be selected:")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 12) {
@@ -285,11 +406,11 @@ struct BottleDetailView: View {
                         .controlSize(.small)
                     }
                     if model.gptkImported {
-                        Label("Game Porting Toolkit imported", systemImage: "checkmark.circle.fill")
+                        Label("Game Porting Toolkit 4 beta 2 imported", systemImage: "checkmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(.green)
                     } else {
-                        Button("Import Game Porting Toolkit…") {
+                        Button("Import GPTK 4…") {
                             Task { await model.importGPTK() }
                         }
                         .controlSize(.small)
@@ -301,7 +422,7 @@ struct BottleDetailView: View {
                         .controlSize(.small)
                     }
                 }
-                Text("The toolkit is Apple's “Game Porting Toolkit” from developer.apple.com (sign-in required; Apple's license doesn't allow bundling it — and note it is not the similarly-named third-party “Porting Kit” app). Download it, open the disk image, then import.")
+                Text("Download the latest Game Porting Toolkit 4 beta from Apple Developer, open its evaluation-environment disk image, then import it. Synthehol currently supports beta 2 or newer. Apple's license does not allow Synthehol to bundle these libraries.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -319,8 +440,14 @@ struct BottleDetailView: View {
                         .foregroundStyle(.green)
                     Spacer()
                     if let transition = model.steamTransitions[bottle.id] {
-                        ProgressView(transition == .starting ? "Starting…" : "Stopping…")
-                            .controlSize(.small)
+                        if transition == .stopTimedOut {
+                            Button("Force Quit Steam", role: .destructive) {
+                                Task { await model.forceQuitSteam(in: bottle) }
+                            }
+                        } else {
+                            ProgressView(transition == .starting ? "Starting…" : "Stopping…")
+                                .controlSize(.small)
+                        }
                     } else {
                         Button("Quit Steam") {
                             Task { await model.quitSteam(in: bottle) }
@@ -370,11 +497,14 @@ struct SteamProgressView: View {
                 )
             } else {
                 ProgressView("Downloading Steam installer… \(done / 1024) KB")
+                    .frame(maxWidth: .infinity)
             }
         case .installing:
             ProgressView("Installing Steam (silent)…")
+                .frame(maxWidth: .infinity)
         case .verifying:
             ProgressView("Verifying…")
+                .frame(maxWidth: .infinity)
         }
     }
 }
