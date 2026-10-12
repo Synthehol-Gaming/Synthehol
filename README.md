@@ -47,11 +47,13 @@ responsible for the software licenses attached to the games and runtimes you use
 
 ## Install
 
-1. Download the latest `Synthehol-*-macOS.dmg` from the project's releases, or
+1. Download the latest `Synthehol-*-macOS.dmg` from
+   [GitHub Releases](https://github.com/Synthehol-Gaming/Synthehol/releases), or
    use the development disk image in [`dist/`](dist/).
 2. Open the disk image and drag **Synthehol** to **Applications**.
-3. Open Synthehol. If macOS blocks the first launch, approve it in **System
-   Settings → Privacy & Security**.
+3. Open Synthehol. Prerelease builds are Developer ID signed but not yet
+   notarized; if macOS blocks the first launch, approve it in **System Settings
+   → Privacy & Security**.
 4. Let Synthehol install Rosetta 2 if it is missing, then choose **Create
    Configuration…**.
 5. Select **Download Runtime**, create the configuration, and choose **Install
