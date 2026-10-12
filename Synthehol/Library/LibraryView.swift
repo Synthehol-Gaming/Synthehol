@@ -544,6 +544,7 @@ struct GameSettingsSheet: View {
     @State private var launchArguments = ""
     @State private var environmentText = ""
     @State private var nudgeStuckLoading = false
+    @State private var performanceProfile: GamePerformanceProfile = .compatibility
 
     private var isCustomGame: Bool { game.store == CustomGameStore.storeID }
     private var trimmedName: String {
@@ -561,6 +562,20 @@ struct GameSettingsSheet: View {
                 }
                 TextField("Launch Arguments", text: $launchArguments,
                           prompt: Text("e.g. -novid -fullscreen"))
+                Picker("Performance", selection: $performanceProfile) {
+                    ForEach(GamePerformanceProfile.allCases) { profile in
+                        Text(profile.title).tag(profile)
+                    }
+                }
+            }
+
+            Text(performanceProfile.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if performanceProfile != .compatibility {
+                Text("Requires a Synthehol Performance Runtime. Stock runtimes keep their normal behavior.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -602,6 +617,7 @@ struct GameSettingsSheet: View {
         let settings = GameSettings.load(for: game, in: bottle)
         launchArguments = settings.launchArguments
         nudgeStuckLoading = settings.nudgeStuckLoading
+        performanceProfile = settings.performanceProfile
         environmentText = settings.environment
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
@@ -619,7 +635,8 @@ struct GameSettingsSheet: View {
         let settings = GameSettings(
             launchArguments: launchArguments.trimmingCharacters(in: .whitespaces),
             environment: environment,
-            nudgeStuckLoading: nudgeStuckLoading
+            nudgeStuckLoading: nudgeStuckLoading,
+            performanceProfile: performanceProfile
         )
         try? settings.save(for: game, in: bottle)
         if isCustomGame && trimmedName != game.name {

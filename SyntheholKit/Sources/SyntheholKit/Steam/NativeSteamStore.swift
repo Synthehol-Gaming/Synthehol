@@ -166,9 +166,17 @@ public struct NativeSteamCompatibilityStatus: Sendable, Equatable {
     }
 
     public let deployment: Deployment
+    public let runnerVersion: String?
+    public let performanceProfilesAvailable: Bool
 
-    public init(deployment: Deployment) {
+    public init(
+        deployment: Deployment,
+        runnerVersion: String? = nil,
+        performanceProfilesAvailable: Bool = false
+    ) {
         self.deployment = deployment
+        self.runnerVersion = runnerVersion
+        self.performanceProfilesAvailable = performanceProfilesAvailable
     }
 
     public static func inspect(
@@ -197,13 +205,31 @@ public struct NativeSteamCompatibilityStatus: Sendable, Equatable {
         let inserts = insert.split(separator: ":").map(String.init)
         let tools = support.appending(path: "tools")
         let runners = support.appending(path: "runners")
-        let hasTool = ((try? String(contentsOf: tools, encoding: .utf8)) ?? "")
-            .split(whereSeparator: \Character.isNewline).isEmpty == false
+        let toolFields = ((try? String(contentsOf: tools, encoding: .utf8)) ?? "")
+            .split(whereSeparator: \Character.isNewline).first?
+            .split(separator: "\t", omittingEmptySubsequences: false)
+        let runnerVersion = toolFields.flatMap { $0.count > 1 ? String($0[1]) : nil }
+        let hasTool = runnerVersion != nil
+        let performanceProfilesAvailable: Bool = {
+            guard let runnerVersion else { return false }
+            let marker = runners.appending(
+                path: "crossover-\(runnerVersion)/CrossOver/share/synthehol/performance-capabilities.json"
+            )
+            guard let data = fm.contents(atPath: marker.path(percentEncoded: false)),
+                  let capabilities = try? JSONDecoder().decode(
+                    PerformanceRuntimeCapabilities.self, from: data
+                  ) else { return false }
+            return capabilities.supportsProfileV1
+        }()
         if inserts.contains(expected), fm.fileExists(atPath: expected),
            fm.fileExists(atPath: support.appending(path: "deployment.json").path(percentEncoded: false)),
            hasTool, fm.fileExists(atPath: runners.path(percentEncoded: false)),
            NativeSteamBridgeProvisioner.isComplete(at: support.appending(path: "bridge")) {
-            return Self(deployment: .installed)
+            return Self(
+                deployment: .installed,
+                runnerVersion: runnerVersion,
+                performanceProfilesAvailable: performanceProfilesAvailable
+            )
         }
         if inserts.allSatisfy({ $0 == expected }) {
             return Self(deployment: .notInstalled)

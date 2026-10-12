@@ -11,6 +11,7 @@ struct Main {
     USAGE:
       synthehol-dev runtime install        Download, verify, install the default runtime
       synthehol-dev runtime install-gptk   Download and verify the GPTK-capable Wine runtime
+      synthehol-dev runtime install-local <manifest.json>   Verify and install a local runtime
       synthehol-dev runtime list           List installed runtime versions
       synthehol-dev rosetta                Check Rosetta 2 status
       synthehol-dev bottle create <name>   Create a bottle and initialize its prefix
@@ -40,6 +41,8 @@ struct Main {
             try await installRuntime()
         case "runtime" where args.count >= 2 && args[1] == "install-gptk":
             try await installRuntime(.gptkBeta)
+        case "runtime" where args.count >= 3 && args[1] == "install-local":
+            try await installLocalRuntime(URL(filePath: args[2]))
         case "runtime" where args.count >= 2 && args[1] == "list":
             let store = RuntimeStore()
             let current = await store.current()
@@ -177,6 +180,25 @@ struct Main {
         }
         let version = try await WineExecutor(runtime: runtime).wineVersion()
         print("Installed runtime \(runtime.version) (wine \(version)) at \(runtime.rootDirectory.path(percentEncoded: false))")
+    }
+
+    static func installLocalRuntime(_ sidecar: URL) async throws {
+        print("Verifying and installing local runtime…")
+        let runtime = try await RuntimeStore().installLocalManifest(at: sidecar) { progress in
+            switch progress {
+            case .downloading(let done, let total):
+                let suffix = total.map { " / \($0 / 1_048_576) MB" } ?? ""
+                print("\rreading: \(done / 1_048_576) MB\(suffix)", terminator: "")
+                fflush(stdout)
+            case .verifying: print("\nverifying checksum…")
+            case .extracting: print("extracting…")
+            case .finishing: print("finishing…")
+            }
+        }
+        guard runtime.supportsPerformanceProfiles else {
+            throw RuntimeStoreError.invalidLocalManifest
+        }
+        print("Installed performance runtime \(runtime.version)")
     }
 
     static func createBottle(named name: String) async throws {

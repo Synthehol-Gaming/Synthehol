@@ -66,6 +66,14 @@ then open **Mac Steam** in Synthehol and select **Install** for Synthehol Steam
 Play. macOS may ask you to allow Synthehol under **System Settings → Privacy &
 Security → App Management** because this integration updates the local Steam app.
 
+If Windows games show **Cloud Status: Out of sync**, use **Install or Repair**
+on Synthehol's Mac Steam page, restart Steam, and reselect **Synthehol Steam Play**
+in the game's **Properties → Compatibility** settings. Updated tools include the
+internal `proton` marker Steam requires to resolve Windows cloud-save folders
+inside the game's prefix. Existing selections may still reference the old tool.
+Wait for Steam's cloud sync to finish before playing; repairing the integration
+does not delete game saves or prefixes.
+
 ## Game Porting Toolkit 4
 
 Synthehol supports Apple's **Game Porting Toolkit 4** and its D3DMetal libraries
@@ -86,15 +94,21 @@ The current importer accepts GPTK 4 beta 2 or newer. GPTK 4's D3DMetal path
 requires macOS 27; DXMT and DXVK remain available for configurations that do not
 use it.
 
-> [!IMPORTANT]
-> **Built with help from NotProton.** Synthehol's native macOS Steam Play layer
-> incorporates and extends components from
-> [NotProton](https://github.com/NotProtonNot/NotProton). The required payload is
-> built into Synthehol, so users do not need to install NotProton separately.
-> NotProton's GPLv3 code and the separately licensed Steam/Proton-derived
-> components retain their upstream notices and license terms; see
-> [`ThirdParty/NotProton-NOTICE.md`](ThirdParty/NotProton-NOTICE.md) and
-> [`NativeSteamCompatibility/Upstream/`](NativeSteamCompatibility/Upstream/).
+## Inspired By
+
+| Project | What it does | What Synthehol uses from it |
+| --- | --- | --- |
+| [NotProton](https://github.com/NotProtonNot/NotProton) | Adds a Proton-style compatibility layer to the native macOS Steam client so it can install and launch Windows games. | The architecture and incorporated components behind Synthehol Steam Play: Steam injection, compatibility-tool registration, launch bridging, overlay support, and Windows-game availability in the Mac Steam library. Synthehol embeds and extends these pieces, so users do not need NotProton installed. |
+| [Recall](https://github.com/AsherJN/recall) | Builds a tuned Wine and DXMT gaming environment for Apple Silicon, with work focused on frame pacing, shader compilation, input latency, and runtime performance. | The optional performance-runtime design and vendored, hash-pinned DXMT/Wine patches for triple buffering, persistent Metal shader caching, eager shader preparation, parallel shader compilation, early shader-IR release, frame pacing, and supporting Wine improvements. Synthehol adds capability-gated per-game profiles so stock runtimes safely fall back to their normal behavior. |
+
+The incorporated projects retain their own license terms. NotProton's GPLv3
+code and separately licensed Steam/Proton-derived components are documented in
+[`ThirdParty/NotProton-NOTICE.md`](ThirdParty/NotProton-NOTICE.md) and
+[`NativeSteamCompatibility/Upstream/`](NativeSteamCompatibility/Upstream/).
+Recall's Apache 2.0 attribution and the upstream licenses of its Wine/DXMT
+patches are retained under [`PerformanceRuntime/Recall/`](PerformanceRuntime/Recall/)
+and documented in
+[`PerformanceRuntime/THIRD_PARTY_NOTICES.md`](PerformanceRuntime/THIRD_PARTY_NOTICES.md).
 
 ## Build from source
 
@@ -122,8 +136,7 @@ compatibility constraints.
 
 Synthehol's original code is available under the [MIT License](LICENSE).
 Incorporated third-party code remains governed by its own license and
-attribution files and is not relicensed under MIT. In addition to NotProton,
-Synthehol builds on the work of Wine, Valve Proton, DXVK, DXMT, Whisky, and
-their contributors.
+attribution files and is not relicensed under MIT. Synthehol also builds on the
+work of Wine, Valve Proton, DXVK, DXMT, Whisky, and their contributors.
 
 > Synthehol: all of the flavor, none of the side effects.

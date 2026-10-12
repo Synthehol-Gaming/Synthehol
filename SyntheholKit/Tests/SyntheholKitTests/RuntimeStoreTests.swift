@@ -119,6 +119,35 @@ struct RuntimeStoreTests {
         #expect(await store.installedVersions() == ["2.0.0", "3.0.0"])
         #expect(await store.current()?.version == "3.0.0")
     }
+
+    @Test func installsLocalSidecarWithTheSameChecksumVerification() async throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fixture = try makeFixtureTarball(in: temp)
+        let sidecar = temp.appending(path: "performance.json")
+        let manifest = LocalRuntimeManifest(
+            version: "performance-test", archive: fixture.url.lastPathComponent,
+            sha256: fixture.sha256
+        )
+        try JSONEncoder().encode(manifest).write(to: sidecar)
+
+        let store = RuntimeStore(rootDirectory: temp.appending(path: "Runtime"))
+        let runtime = try await store.installLocalManifest(at: sidecar)
+        #expect(runtime.version == "performance-test")
+        #expect(await store.current()?.version == "performance-test")
+    }
+
+    @Test func rejectsUnsafeRuntimeVersion() async throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fixture = try makeFixtureTarball(in: temp)
+        let store = RuntimeStore(rootDirectory: temp.appending(path: "Runtime"))
+        await #expect(throws: RuntimeStoreError.invalidVersion("../escape")) {
+            try await store.install(RuntimeManifest(
+                version: "../escape", url: fixture.url, sha256: fixture.sha256
+            ))
+        }
+    }
 }
 
 struct WineExecutorTests {
@@ -139,6 +168,30 @@ struct WineExecutorTests {
         #expect(env["WINEESYNC"] == "1")
         #expect(env["MTL_HUD_ENABLED"] == "1")
         #expect(env["LC_ALL"] == "ja_JP.UTF-8")
+    }
+}
+
+struct PerformanceRuntimeCapabilitiesTests {
+    @Test func requiresValidCompleteV1Manifest() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let marker = temp.appending(
+            path: "Libraries/Wine/share/synthehol/performance-capabilities.json"
+        )
+        try FileManager.default.createDirectory(
+            at: marker.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let runtime = WineRuntime(version: "performance", rootDirectory: temp)
+        try Data("{\"schemaVersion\":1,\"implementation\":\"test\",\"features\":[]}".utf8)
+            .write(to: marker)
+        #expect(!runtime.supportsPerformanceProfiles)
+
+        let capabilities = PerformanceRuntimeCapabilities(
+            schemaVersion: 1, implementation: "test",
+            features: PerformanceRuntimeCapabilities.requiredV1Features
+        )
+        try JSONEncoder().encode(capabilities).write(to: marker)
+        #expect(runtime.supportsPerformanceProfiles)
     }
 }
 

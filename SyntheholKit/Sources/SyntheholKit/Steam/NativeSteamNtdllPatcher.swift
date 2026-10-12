@@ -20,7 +20,6 @@ enum NativeSteamNtdllPatcher {
         let appendSection: Bool
     }
 
-    static let supportedVersion = "4.5.105-beta.1"
     static let patches = [
         Patch(
             arch: "x86_64-windows",
@@ -49,9 +48,10 @@ enum NativeSteamNtdllPatcher {
     static func install(
         runtime: WineRuntime, clone: URL, bridge: URL, payloadRoot: URL
     ) throws {
-        guard runtime.version == supportedVersion else {
-            throw NativeSteamInstallError.unsupportedRuntime(runtime.version)
-        }
+        // Compatibility is established by exact component hashes and verified
+        // patch sites below, not by a marketing version string. This lets a
+        // Synthehol performance runtime retain the known-good Wine binaries
+        // while replacing only its DXMT translator.
         for patch in patches {
             let source = runtime.librariesDirectory.appending(path: "Wine/lib/wine/\(patch.arch)/ntdll.dll")
             let live = clone.appending(path: "lib/wine/\(patch.arch)/ntdll.dll")

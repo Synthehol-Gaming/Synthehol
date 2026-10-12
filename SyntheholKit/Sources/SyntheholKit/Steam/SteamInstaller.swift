@@ -228,7 +228,9 @@ public struct SteamInstaller: Sendable {
             in: bottle,
             executor: executor,
             arguments: ["-applaunch", game.storeGameID] + settings.launchArgumentList,
-            extraEnvironment: settings.environment,
+            extraEnvironment: settings.effectiveEnvironment(
+                supportsPerformanceProfiles: executor.runtime.supportsPerformanceProfiles
+            ),
             debugLogging: debugLogging,
             nudgeStuckLoadingFor: settings.nudgeStuckLoading ? game : nil
         )

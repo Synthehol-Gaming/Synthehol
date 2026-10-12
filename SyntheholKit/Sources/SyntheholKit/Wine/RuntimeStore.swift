@@ -15,6 +15,8 @@ public enum RuntimeStoreError: Error, Equatable {
     case invalidArchiveLayout(missing: String)
     case extractionFailed(exitCode: Int32, stderr: String)
     case notInstalled(version: String)
+    case invalidVersion(String)
+    case invalidLocalManifest
 }
 
 /// Downloads, verifies, and installs Wine runtimes under `Runtime/<version>/`.
@@ -75,6 +77,9 @@ public actor RuntimeStore {
         urlSession: URLSession = .shared,
         onProgress: (@Sendable (RuntimeInstallProgress) -> Void)? = nil
     ) async throws -> WineRuntime {
+        guard Self.isSafeVersion(manifest.version) else {
+            throw RuntimeStoreError.invalidVersion(manifest.version)
+        }
         let versionDir = rootDirectory.appending(path: manifest.version)
         if let existing = try? runtime(for: manifest.version) {
             try activate(existing)
@@ -127,6 +132,16 @@ public actor RuntimeStore {
         return installed
     }
 
+    public func installLocalManifest(
+        at sidecar: URL,
+        onProgress: (@Sendable (RuntimeInstallProgress) -> Void)? = nil
+    ) async throws -> WineRuntime {
+        let local = try LocalRuntimeManifest.load(from: sidecar)
+        return try await install(
+            local.runtimeManifest(relativeTo: sidecar), onProgress: onProgress
+        )
+    }
+
     /// Points the `current` symlink at `runtime` (relative link, atomic replace).
     public func activate(_ runtime: WineRuntime) throws {
         let temporary = rootDirectory.appending(path: ".current-\(UUID().uuidString)")
@@ -151,6 +166,12 @@ public actor RuntimeStore {
         for stale in versions.dropLast() {
             try FileManager.default.removeItem(at: rootDirectory.appending(path: stale))
         }
+    }
+
+    private static func isSafeVersion(_ version: String) -> Bool {
+        guard let first = version.first, first.isLetter || first.isNumber,
+              version.count <= 64 else { return false }
+        return version.allSatisfy { $0.isLetter || $0.isNumber || ".-_".contains($0) }
     }
 
 }

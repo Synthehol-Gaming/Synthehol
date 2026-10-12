@@ -58,6 +58,7 @@ struct GameSettingsTests {
         )
         #expect(settings.launchArguments == "-novid")
         #expect(settings.nudgeStuckLoading == false)
+        #expect(settings.performanceProfile == .compatibility)
     }
 
     @Test func roundtripsNudgeSetting() throws {
@@ -79,6 +80,31 @@ struct GameSettingsTests {
         #expect(GameSettings.load(for: portal2, in: directory) == settings)
         #expect(GameSettings.fileURL(for: portal2, in: directory).lastPathComponent
                 == "steam-620.plist")
+    }
+
+    @Test func performanceProfilesMergeWithoutOverridingExplicitEnvironment() {
+        let settings = GameSettings(
+            environment: ["DXMT_CANVAS_DRAWABLES": "2", "CUSTOM": "yes"],
+            performanceProfile: .maximumFPS
+        )
+        let environment = settings.effectiveEnvironment()
+        #expect(environment["DXMT_PREPARE_SHADERS"] == "1")
+        #expect(environment["DXMT_CANVAS_DRAWABLES"] == "2")
+        #expect(environment["CUSTOM"] == "yes")
+        #expect(settings.effectiveEnvironment(supportsPerformanceProfiles: false)
+            == ["DXMT_CANVAS_DRAWABLES": "2", "CUSTOM": "yes"])
+    }
+
+    @Test func writesStrictNativeSteamPerformanceProfile() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let settings = GameSettings(performanceProfile: .balanced)
+        try NativeSteamPerformanceProfileStore.save(settings, appID: "620", support: temp)
+        let data = try String(
+            contentsOf: temp.appending(path: "performance-profiles/620.conf"),
+            encoding: .utf8
+        )
+        #expect(data == "PROFILE=balanced\n")
     }
 }
 

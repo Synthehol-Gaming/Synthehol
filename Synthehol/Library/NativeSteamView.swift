@@ -186,11 +186,29 @@ struct NativeSteamView: View {
     @ViewBuilder private var compatibilityBanner: some View {
         switch model.nativeSteamStatus.deployment {
         case .installed:
-            HStack {
-                Label("Synthehol Steam Play is installed", systemImage: "checkmark.seal.fill")
-                    .foregroundStyle(.green)
-                Spacer()
-                Button("Repair") { Task { await model.installNativeSteamCompatibility() } }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Synthehol Steam Play is installed", systemImage: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                    Spacer()
+                    Button("Repair") { Task { await model.installNativeSteamCompatibility() } }
+                }
+                HStack(spacing: 8) {
+                    if let version = model.nativeSteamStatus.runnerVersion {
+                        Text(version)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    if model.nativeSteamStatus.performanceProfilesAvailable {
+                        Label("Performance profiles available", systemImage: "bolt.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    } else {
+                        Label("Standard runtime", systemImage: "gauge.with.dots.needle.33percent")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         case .steamMissing:
             Label("Install the macOS Steam client to use this library.", systemImage: "exclamationmark.triangle")
@@ -338,10 +356,31 @@ private struct NativeSteamGameSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     let game: InstalledGame
     @State private var nudgeStuckLoading = false
+    @State private var performanceProfile: GamePerformanceProfile = .compatibility
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(game.name).font(.title3.bold())
+            Picker("Performance", selection: $performanceProfile) {
+                ForEach(GamePerformanceProfile.allCases) { profile in
+                    Text(profile.title).tag(profile)
+                }
+            }
+            Text(performanceProfile.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if performanceProfile != .compatibility {
+                Label(
+                    model.nativeSteamStatus.performanceProfilesAvailable
+                        ? "This profile will be applied on the next launch."
+                        : "Requires a Synthehol Performance Runtime; Steam will use its stock settings.",
+                    systemImage: model.nativeSteamStatus.performanceProfilesAvailable
+                        ? "checkmark.circle.fill" : "info.circle"
+                )
+                    .font(.caption)
+                    .foregroundStyle(model.nativeSteamStatus.performanceProfilesAvailable
+                                     ? Color.green : Color.secondary)
+            }
             Toggle("Nudge stuck loading screens", isOn: $nudgeStuckLoading)
             Text("Briefly pauses and resumes the game during startup to work around a Unity/Mono loading freeze under Rosetta. Healthy games only experience a short pause.")
                 .font(.caption)
@@ -352,6 +391,7 @@ private struct NativeSteamGameSettingsSheet: View {
                 Button("Save") {
                     var settings = model.nativeGameSettings(for: game)
                     settings.nudgeStuckLoading = nudgeStuckLoading
+                    settings.performanceProfile = performanceProfile
                     model.saveNativeGameSettings(settings, for: game)
                     dismiss()
                 }
@@ -361,7 +401,9 @@ private struct NativeSteamGameSettingsSheet: View {
         .padding(20)
         .frame(width: 440)
         .onAppear {
-            nudgeStuckLoading = model.nativeGameSettings(for: game).nudgeStuckLoading
+            let settings = model.nativeGameSettings(for: game)
+            nudgeStuckLoading = settings.nudgeStuckLoading
+            performanceProfile = settings.performanceProfile
         }
     }
 }

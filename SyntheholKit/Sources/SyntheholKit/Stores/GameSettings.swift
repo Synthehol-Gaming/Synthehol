@@ -1,5 +1,51 @@
 import Foundation
 
+public enum GamePerformanceProfile: String, Codable, CaseIterable, Identifiable, Sendable {
+    case compatibility
+    case balanced
+    case maximumFPS
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .compatibility: "Compatibility"
+        case .balanced: "Balanced"
+        case .maximumFPS: "Maximum FPS"
+        }
+    }
+
+    public var detail: String {
+        switch self {
+        case .compatibility: "Uses the runtime defaults. Best for games with rendering issues."
+        case .balanced: "Uses triple buffering and persistent shader caches when the runtime supports them."
+        case .maximumFPS: "Also prepares shader variants early and uses parallel compilation to reduce gameplay stutter."
+        }
+    }
+
+    /// Variables understood by Synthehol's Recall-derived performance runtime.
+    /// A stock runtime safely ignores these; the Steam wrapper only applies them
+    /// when its runner advertises performance-runtime capabilities.
+    public var environment: [String: String] {
+        switch self {
+        case .compatibility:
+            [:]
+        case .balanced:
+            [
+                "DXMT_CANVAS_DRAWABLES": "3",
+                "DXMT_USE_DEFAULT_METAL_CACHE": "1"
+            ]
+        case .maximumFPS:
+            [
+                "DXMT_CANVAS_DRAWABLES": "3",
+                "DXMT_USE_DEFAULT_METAL_CACHE": "1",
+                "DXMT_PREPARE_SHADERS": "1",
+                "DXMT_CONFIG": "d3d11.releaseShaderIR=True;d3d11.shaderCompilerThreads=8;d3d11.shaderCompilerNormalPriority=True"
+            ]
+        }
+    }
+}
+
 /// Per-game launch configuration, stored per bottle at
 /// `Game Settings/<store>-<gameID>.plist`.
 ///
@@ -13,15 +59,18 @@ public struct GameSettings: Codable, Equatable, Sendable {
     /// times during startup so a stuck loading screen un-wedges itself
     /// (see `GameNudger`).
     public var nudgeStuckLoading: Bool
+    public var performanceProfile: GamePerformanceProfile
 
     public init(
         launchArguments: String = "",
         environment: [String: String] = [:],
-        nudgeStuckLoading: Bool = false
+        nudgeStuckLoading: Bool = false,
+        performanceProfile: GamePerformanceProfile = .compatibility
     ) {
         self.launchArguments = launchArguments
         self.environment = environment
         self.nudgeStuckLoading = nudgeStuckLoading
+        self.performanceProfile = performanceProfile
     }
 
     public init(from decoder: any Decoder) throws {
@@ -33,11 +82,19 @@ public struct GameSettings: Codable, Equatable, Sendable {
         nudgeStuckLoading = try container.decodeIfPresent(
             Bool.self, forKey: .nudgeStuckLoading
         ) ?? false
+        performanceProfile = try container.decodeIfPresent(
+            GamePerformanceProfile.self, forKey: .performanceProfile
+        ) ?? .compatibility
     }
 
     /// Arguments split for passing to the launcher (simple whitespace split).
     public var launchArgumentList: [String] {
         launchArguments.split(separator: " ").map(String.init)
+    }
+
+    public func effectiveEnvironment(supportsPerformanceProfiles: Bool = true) -> [String: String] {
+        guard supportsPerformanceProfiles else { return environment }
+        return performanceProfile.environment.merging(environment) { _, explicit in explicit }
     }
 
     // MARK: Persistence
@@ -82,5 +139,23 @@ public struct GameSettings: Codable, Equatable, Sendable {
         let encoder = PropertyListEncoder()
         encoder.outputFormat = .xml
         try (try encoder.encode(self)).write(to: url, options: .atomic)
+    }
+}
+
+/// Writes the small data file consumed by the native Steam wrapper. The wrapper
+/// parses an allow-list and never executes this file as shell code.
+public enum NativeSteamPerformanceProfileStore {
+    public static func save(
+        _ settings: GameSettings,
+        appID: String,
+        support: URL = SyntheholPaths.applicationSupport.appending(path: "NativeSteam")
+    ) throws {
+        guard !appID.isEmpty, appID.allSatisfy(\.isNumber) else { return }
+        let directory = support.appending(path: "performance-profiles")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let contents = "PROFILE=\(settings.performanceProfile.rawValue)\n"
+        try Data(contents.utf8).write(
+            to: directory.appending(path: "\(appID).conf"), options: .atomic
+        )
     }
 }

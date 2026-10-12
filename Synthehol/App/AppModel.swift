@@ -339,6 +339,7 @@ final class AppModel {
     func saveNativeGameSettings(_ settings: GameSettings, for game: InstalledGame) {
         do {
             try settings.save(for: game, in: nativeGameSettingsDirectory)
+            try NativeSteamPerformanceProfileStore.save(settings, appID: game.storeGameID)
         } catch {
             lastError = "Couldn't save settings for \"\(game.name)\": \(error.localizedDescription)"
         }
@@ -586,6 +587,23 @@ final class AppModel {
             await redeployBackendsAfterRuntimeChange()
         } catch {
             lastError = "Runtime install failed: \(error.localizedDescription)"
+        }
+    }
+
+    func installLocalRuntime(from sidecar: URL) async {
+        runtimeProgress = .verifying
+        defer { runtimeProgress = nil }
+        do {
+            let installed = try await runtimeStore.installLocalManifest(at: sidecar) { progress in
+                Task { @MainActor [weak self] in self?.runtimeProgress = progress }
+            }
+            guard installed.supportsPerformanceProfiles else {
+                throw RuntimeStoreError.invalidLocalManifest
+            }
+            runtime = installed
+            await redeployBackendsAfterRuntimeChange()
+        } catch {
+            lastError = "Performance runtime import failed: \(error.localizedDescription)"
         }
     }
 
@@ -854,9 +872,12 @@ final class AppModel {
         let settings = GameSettings.load(for: game, in: bottle)
         gameRunStates[game.id] = .starting
         watchGame(game)
+        let profileEnvironment = settings.effectiveEnvironment(
+            supportsPerformanceProfiles: executor.runtime.supportsPerformanceProfiles
+        )
         let extra = debugLogging
-            ? settings.environment.merging(["WINEDEBUG": "+timestamp,+pid,+tid,+seh,+module,+d3d,+dxgi"]) { _, new in new }
-            : settings.environment
+            ? profileEnvironment.merging(["WINEDEBUG": "+timestamp,+pid,+tid,+seh,+module,+d3d,+dxgi"]) { _, new in new }
+            : profileEnvironment
         let stream = executor.runProgram(
             at: executable, arguments: settings.launchArgumentList,
             bottle: bottle, waitForExit: true,

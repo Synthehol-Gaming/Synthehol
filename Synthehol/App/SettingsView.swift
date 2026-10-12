@@ -1,5 +1,6 @@
 import SwiftUI
 import SyntheholKit
+import UniformTypeIdentifiers
 
 enum AppAppearance: String, CaseIterable, Identifiable {
     case system, light, dark
@@ -44,8 +45,11 @@ struct SettingsView: View {
 
             storagePane
                 .tabItem { Label("Bottle Storage", systemImage: "externaldrive") }
+
+            runtimePane
+                .tabItem { Label("Runtime", systemImage: "speedometer") }
         }
-        .frame(width: 600, height: 390)
+        .frame(width: 600, height: 420)
         .onChange(of: appearance) {
             AppAppearance.applyStored()
         }
@@ -131,6 +135,73 @@ struct SettingsView: View {
             }
         }
         .padding(24)
+    }
+
+    private var runtimePane: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Runtime")
+                .font(.title2.bold())
+
+            GroupBox {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(model.runtime?.version ?? "Not installed")
+                            .fontWeight(.medium)
+                        Text(model.runtime?.supportsPerformanceProfiles == true
+                             ? "Synthehol performance profiles are available."
+                             : "This runtime uses standard performance behavior.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if model.runtime?.supportsPerformanceProfiles == true {
+                        Label("Performance", systemImage: "bolt.fill")
+                            .foregroundStyle(.green)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(6)
+            }
+
+            Text("Import a locally assembled performance runtime using its checksum sidecar. The archive is verified before installation, and the previous runtime is retained for rollback.")
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Button("Import Performance Runtime…") { choosePerformanceRuntime() }
+                    .disabled(model.runtimeProgress != nil)
+                if model.runtimeProgress != nil {
+                    ProgressView().controlSize(.small)
+                    Text(runtimeProgressLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(28)
+    }
+
+    private var runtimeProgressLabel: String {
+        switch model.runtimeProgress {
+        case .downloading: "Reading archive…"
+        case .verifying: "Verifying checksum…"
+        case .extracting: "Extracting…"
+        case .finishing: "Activating…"
+        case nil: ""
+        }
+    }
+
+    private func choosePerformanceRuntime() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json]
+        panel.prompt = "Import Runtime"
+        panel.message = "Choose the .tar.gz.json checksum sidecar produced with the performance runtime."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await model.installLocalRuntime(from: url) }
     }
 
     private func storageRow(_ storage: BottleStorage) -> some View {

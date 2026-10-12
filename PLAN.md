@@ -21,6 +21,28 @@ Windows applications.
 - Installed games appear as poster tiles ("movie poster" UX) and launch with one click.
 - Optional: exportable per-game launcher `.app`s (Wineskin-style shells) so games appear
   in Spotlight/Launchpad and get macOS Game Mode.
+- Per-game performance profiles work identically in bottles and native Mac Steam.
+  Compatibility remains the migration default. Balanced and Maximum FPS expose
+  triple buffering, persistent Metal shader caching, eager shader preparation, and
+  parallel shader compilation from a capability-advertising performance runtime.
+  The native Steam wrapper parses a strict profile data file keyed by app ID and
+  falls back to the stock runtime when those capabilities are absent.
+
+## Performance runtime
+
+Synthehol's performance-runtime work is informed by and will reuse the Apache-2.0
+or upstream-licensed patches from [AsherJN/recall](https://github.com/AsherJN/recall).
+The UI and launch contract are intentionally separate from the patched binaries:
+the runner must contain `share/synthehol/performance-capabilities.json` before the
+native Steam wrapper enables Recall-derived variables. This prevents a profile from
+silently changing behavior on stock CrossOver/DXMT and lets the runtime roll back
+without rewriting game settings.
+
+The first supported capabilities are DXMT triple buffering/default Metal caching,
+eager shader variant preparation, early shader-IR release, and eight normal-priority
+compiler workers. MetalFX and raw-mouse patches remain opt-in future capabilities;
+they are not enabled globally because their game-facing API emulation and executable
+matching require per-title validation.
 
 ## What we learned from Whisky
 

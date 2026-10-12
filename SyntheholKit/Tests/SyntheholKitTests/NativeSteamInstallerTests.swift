@@ -79,6 +79,31 @@ private let fakeRunnerProvisioner: @Sendable (WineRuntime, URL, URL) async throw
 }
 
 struct NativeSteamInstallerTests {
+    @Test func stagesPairedD3DMetalModulesWithoutReplacingSharedDXGI() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appending(path: "synthehol-metal-modules-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        let clone = root.appending(path: "D3DMetal")
+        let source = root.appending(path: "import")
+        let shared = root.appending(path: "CrossOver/lib/wine/x86_64-windows/dxgi.dll")
+        let external = clone.appending(path: "lib/external/libd3dshared.dylib")
+        for directory in [source, shared.deletingLastPathComponent(), external.deletingLastPathComponent()] {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try Data("stock".utf8).write(to: shared)
+        try Data("unix-bridge".utf8).write(to: external)
+        for name in ["dxgi", "d3d11", "d3d12"] {
+            try Data(name.utf8).write(to: source.appending(path: "\(name).dll"))
+        }
+        try NativeSteamInstaller.stageD3DMetalModules(in: clone, from: source)
+        try NativeSteamInstaller.stageD3DMetalModules(in: clone, from: source)
+        #expect(try Data(contentsOf: shared) == Data("stock".utf8))
+        for name in ["dxgi", "d3d11", "d3d12"] {
+            #expect(try Data(contentsOf: clone.appending(path: "lib/wine/x86_64-windows/\(name).dll")) == Data(name.utf8))
+            #expect(try Data(contentsOf: clone.appending(path: "lib/wine/x86_64-unix/\(name).so")) == Data("unix-bridge".utf8))
+        }
+    }
+
     @Test func installsOwnedPayloadAndCanRepairSteam() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "synthehol-native-installer-\(UUID().uuidString)")
@@ -111,10 +136,30 @@ struct NativeSteamInstallerTests {
             path: "bridge/x86_64-unix/lsteamclient.so"
         ).path))
         #expect(try String(contentsOf: support.appending(path: "tools"), encoding: .utf8)
-            == "synthehol-test-1.0\ttest-1.0\trosetta\tSynthehol Steam Play (test-1.0)\n")
+            == "synthehol-proton-test-1.0\ttest-1.0\trosetta\tSynthehol Steam Play (test-1.0)\n")
         #expect(try FileManager.default.destinationOfSymbolicLink(
             atPath: support.appending(path: "runners/crossover-test-1.0/CrossOver").path
         ) == runtime.librariesDirectory.appending(path: "Wine").path)
+        var status = NativeSteamCompatibilityStatus.inspect(
+            steamApplication: app, support: support
+        )
+        #expect(status.deployment == .installed)
+        #expect(status.runnerVersion == "test-1.0")
+        #expect(!status.performanceProfilesAvailable)
+
+        let marker = runtime.performanceCapabilities
+        try FileManager.default.createDirectory(
+            at: marker.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let capabilities = PerformanceRuntimeCapabilities(
+            schemaVersion: 1, implementation: "test",
+            features: PerformanceRuntimeCapabilities.requiredV1Features
+        )
+        try JSONEncoder().encode(capabilities).write(to: marker)
+        status = NativeSteamCompatibilityStatus.inspect(
+            steamApplication: app, support: support
+        )
+        #expect(status.performanceProfilesAvailable)
 
         let plistData = try Data(contentsOf: app.appending(path: "Contents/Info.plist"))
         let plist = try #require(

@@ -181,7 +181,10 @@ public enum NativeSteamInstaller {
             $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" ? $0 : "-"
         }
         let build = String(safeVersion)
-        let name = "synthehol-\(build)"
+        // Steam recognizes Proton-style Windows AutoCloud roots by the internal
+        // tool name. Keep this marker even though the displayed name is Synthehol.
+        // Without it, Mac Steam skips AppData/Documents saves as unresolved paths.
+        let name = "synthehol-proton-\(build)"
         let runner = support.appending(path: "runners/crossover-\(build)")
         try await runnerProvisioner(runtime, support, payloadRoot)
         guard fm.fileExists(atPath: runner.appending(path: "CrossOver/lib/wine").path) else {
@@ -225,11 +228,43 @@ public enum NativeSteamInstaller {
                 guard fm.fileExists(atPath: source.path) else { continue }
                 try replace(source, at: clone.appending(path: "lib/wine/\(arch)/\(name)"))
             }
+            if D3DMetalSupport.isImported {
+                let metalClone = staging.appending(path: "D3DMetal")
+                let copied = try await ProcessRunner.run(
+                    executable: URL(filePath: "/bin/cp"),
+                    arguments: ["-c", "-R", clone.path, metalClone.path]
+                )
+                guard copied.exitCode == 0 else {
+                    throw NativeSteamInstallError.runnerInstallationFailed(copied.standardError)
+                }
+                try stageD3DMetalModules(in: metalClone, from: D3DMetalSupport.windowsLibraries)
+            }
             if fm.fileExists(atPath: runner.path) { try fm.removeItem(at: runner) }
             try fm.moveItem(at: staging, to: runner)
         } catch {
             try? fm.removeItem(at: staging)
             throw error
+        }
+    }
+
+    /// Install Apple's paired modules into a separate D3DMetal runner copy.
+    /// The normal runner's DXGI remains available to other backends.
+    static func stageD3DMetalModules(in clone: URL, from sourceDirectory: URL) throws {
+        let fm = FileManager.default
+        let modules = clone.appending(path: "lib/wine")
+        let windows = modules.appending(path: "x86_64-windows")
+        let unix = modules.appending(path: "x86_64-unix")
+        try fm.createDirectory(at: windows, withIntermediateDirectories: true)
+        try fm.createDirectory(at: unix, withIntermediateDirectories: true)
+        for name in ["dxgi", "d3d10", "d3d10core", "d3d11", "d3d12"] {
+            let source = sourceDirectory.appending(path: "\(name).dll")
+            guard fm.fileExists(atPath: source.path) else { continue }
+            try replace(source, at: windows.appending(path: "\(name).dll"))
+            let link = unix.appending(path: "\(name).so")
+            try? fm.removeItem(at: link)
+            try fm.createSymbolicLink(
+                atPath: link.path, withDestinationPath: "../../external/libd3dshared.dylib"
+            )
         }
     }
 

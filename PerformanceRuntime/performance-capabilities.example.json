@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "implementation": "synthehol-recall-v1",
+  "features": [
+    "dxmt.default-metal-cache",
+    "dxmt.eager-shader-preparation",
+    "dxmt.parallel-shader-compilation",
+    "dxmt.release-shader-ir",
+    "dxmt.triple-buffering"
+  ]
+}

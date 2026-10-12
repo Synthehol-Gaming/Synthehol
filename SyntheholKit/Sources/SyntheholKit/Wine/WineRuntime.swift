@@ -1,5 +1,23 @@
 import Foundation
 
+public struct PerformanceRuntimeCapabilities: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let implementation: String
+    public let features: Set<String>
+
+    public static let requiredV1Features: Set<String> = [
+        "dxmt.default-metal-cache",
+        "dxmt.eager-shader-preparation",
+        "dxmt.parallel-shader-compilation",
+        "dxmt.release-shader-ir",
+        "dxmt.triple-buffering"
+    ]
+
+    public var supportsProfileV1: Bool {
+        schemaVersion == 1 && features.isSuperset(of: Self.requiredV1Features)
+    }
+}
+
 /// An installed Wine runtime on disk: `Runtime/<version>/Libraries/…`
 ///
 /// The tarball layout follows the WhiskyWine convention: a top-level `Libraries/`
@@ -19,6 +37,17 @@ public struct WineRuntime: Sendable, Equatable {
     public var wine64: URL { wineBinDirectory.appending(path: "wine64") }
     public var wineserver: URL { wineBinDirectory.appending(path: "wineserver") }
     public var dxvkDirectory: URL { librariesDirectory.appending(path: "DXVK") }
+    public var performanceCapabilities: URL {
+        librariesDirectory.appending(path: "Wine/share/synthehol/performance-capabilities.json")
+    }
+    public var supportsPerformanceProfiles: Bool {
+        guard let data = FileManager.default.contents(
+            atPath: performanceCapabilities.path(percentEncoded: false)
+        ), let capabilities = try? JSONDecoder().decode(
+            PerformanceRuntimeCapabilities.self, from: data
+        ) else { return false }
+        return capabilities.supportsProfileV1
+    }
 
     /// True when the essential binaries exist.
     public var isValid: Bool {

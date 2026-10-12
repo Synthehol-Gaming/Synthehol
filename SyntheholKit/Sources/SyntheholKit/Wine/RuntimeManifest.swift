@@ -23,3 +23,40 @@ public struct RuntimeManifest: Codable, Equatable, Sendable {
         SyntheholPaths.runtimes.appending(path: version)
     }
 }
+
+/// Sidecar emitted with a locally assembled runtime. The archive path is
+/// resolved relative to the sidecar, while the archive bytes remain subject to
+/// the same SHA-256 verification as a downloaded runtime.
+public struct LocalRuntimeManifest: Codable, Equatable, Sendable {
+    public var schemaVersion: Int
+    public var version: String
+    public var archive: String
+    public var sha256: String
+
+    public init(schemaVersion: Int = 1, version: String, archive: String, sha256: String) {
+        self.schemaVersion = schemaVersion
+        self.version = version
+        self.archive = archive
+        self.sha256 = sha256
+    }
+
+    public static func load(from url: URL) throws -> LocalRuntimeManifest {
+        let value = try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
+        guard value.schemaVersion == 1 else {
+            throw RuntimeStoreError.invalidLocalManifest
+        }
+        return value
+    }
+
+    public func runtimeManifest(relativeTo sidecar: URL) throws -> RuntimeManifest {
+        guard !archive.isEmpty, URL(filePath: archive).lastPathComponent == archive else {
+            throw RuntimeStoreError.invalidLocalManifest
+        }
+        return RuntimeManifest(
+            version: version,
+            url: sidecar.deletingLastPathComponent().appending(path: archive),
+            sha256: sha256,
+            notes: "Locally assembled performance runtime"
+        )
+    }
+}

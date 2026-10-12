@@ -36,6 +36,14 @@ np_display=$(sed -n 's/.*"display_name"[[:space:]]*"\(.*\)".*/\1/p' \
   "$np_tool_dir/compatibilitytool.vdf" 2>/dev/null | head -1) || np_display=""
 [ -n "$np_display" ] || np_display="CrossOver build ${np_build:-unknown}"
 CX_ROOT="$np_support/runners/crossover-$np_build/CrossOver"
+if [ "$CX_GRAPHICS_BACKEND" = d3dmetal ]; then
+  CX_ROOT="${CX_ROOT%/CrossOver}/D3DMetal"
+  if [ ! -f "$CX_ROOT/lib/wine/x86_64-windows/dxgi.dll" ]; then
+    echo "D3DMetal runner needs repair: use Install or Repair in Synthehol to install the matching bridge." >&2
+    exit 1
+  fi
+  export ROSETTA_ADVERTISE_AVX=1
+fi
 export CX_ROOT
 # CrossOver initializes Rosetta's Windows thread-state support even without D3DMetal.
 if [ -f "$CX_ROOT/lib64/apple_gptk/external/libd3dshared.dylib" ]; then
@@ -104,6 +112,42 @@ case "$app_id" in ''|0) app_id="$SteamAppId" ;; esac
 case "$app_id" in ''|0) app_id=$(basename "$STEAM_COMPAT_DATA_PATH" 2>/dev/null) ;; esac
 case "$app_id" in ''|*[!0-9]*) app_id=0 ;; esac
 echo "app_id=$app_id (STEAM_COMPAT_APP_ID=$STEAM_COMPAT_APP_ID)" >> "$log" 2>&1 || true
+
+# Per-game tuning written by Synthehol. This is deliberately parsed rather than
+# sourced: profile files are data, and can never execute commands in Steam's process.
+performance_profile=compatibility
+profile_file="$np_support/performance-profiles/$app_id.conf"
+if [ -f "$profile_file" ]; then
+  while IFS='=' read -r key value; do
+    case "$key:$value" in
+      PROFILE:compatibility|PROFILE:balanced|PROFILE:maximumFPS)
+        performance_profile="$value"
+        ;;
+    esac
+  done < "$profile_file"
+fi
+performance_capabilities="$CX_ROOT/share/synthehol/performance-capabilities.json"
+performance_capable=0
+if [ -f "$performance_capabilities" ] && \
+   grep -q '"schemaVersion"[[:space:]]*:[[:space:]]*1' "$performance_capabilities"; then
+  performance_capable=1
+  for feature in dxmt.default-metal-cache dxmt.eager-shader-preparation \
+    dxmt.parallel-shader-compilation dxmt.release-shader-ir dxmt.triple-buffering
+  do
+    grep -q "\"$feature\"" "$performance_capabilities" || performance_capable=0
+  done
+fi
+if [ "$performance_profile" != compatibility ] && [ "$performance_capable" = 1 ]; then
+  export DXMT_CANVAS_DRAWABLES=3
+  export DXMT_USE_DEFAULT_METAL_CACHE=1
+  if [ "$performance_profile" = maximumFPS ]; then
+    export DXMT_PREPARE_SHADERS=1
+    export DXMT_CONFIG='d3d11.releaseShaderIR=True;d3d11.shaderCompilerThreads=8;d3d11.shaderCompilerNormalPriority=True'
+  fi
+  echo "performance_profile=$performance_profile capabilities=$performance_capabilities" >> "$log" 2>&1 || true
+else
+  echo "performance_profile=$performance_profile (stock runtime fallback)" >> "$log" 2>&1 || true
+fi
 
 # Steam does not set SteamAppId or SteamGameId for helpers like the install-script
 # evaluator. If they are set, SteamAPI_Init registers the helper as the running game so the
@@ -360,8 +404,23 @@ lay_out_proton_profile() {
     echo "=== promoted users/crossover to the real Windows profile ===" >> "$log" 2>&1 || true
   elif [ -d "$users/crossover" ] && [ ! -L "$users/crossover" ] \
       && [ -d "$users/steamuser" ] && [ ! -L "$users/steamuser" ]; then
-    echo "=== both Windows profiles contain files; refusing to merge them ===" >> "$log" 2>&1 || true
-    return 1
+    # AutoCloud can populate steamuser before Wine creates crossover on first
+    # launch. Normalize legacy paths before comparing the two profiles.
+    migrate_user_paths "$users/steamuser" || return 1
+    migrate_user_paths "$users/crossover" || return 1
+    if ! merge_user_dir "$users/steamuser" "$users/crossover"; then
+      echo "=== conflicting Windows profiles retained; refusing to replace saves ===" >> "$log" 2>&1 || true
+      return 1
+    fi
+    # Retain the original cloud profile as a backup, then expose the shared path.
+    held="$users/steamuser.before-synthehol-merge"
+    if [ -e "$held" ] || [ -L "$held" ]; then
+      echo "=== profile backup already exists; merge needs attention ===" >> "$log" 2>&1 || true
+      return 1
+    fi
+    mv "$users/steamuser" "$held" || return 1
+    ln -s crossover "$users/steamuser" || return 1
+    echo "=== merged Windows profiles with original cloud files backed up ===" >> "$log" 2>&1 || true
   fi
   profile="$users/crossover"
   if [ -L "$profile" ]; then
