@@ -41,7 +41,14 @@ OVERLAY := $(BUILD)/synthehol-overlay-shim.dylib
 RUN_HEADER := $(BUILD)/generated/compat_run.h
 
 .PHONY: all dobby payload clean
-all: $(DYLIB) $(OVERLAY)
+all: $(DYLIB) $(OVERLAY) $(BUILD)/iconmaker
+
+$(BUILD)/iconmaker: $(ROOT)/iconmaker.m $(UPSTREAM)/dylib/util/peicon.c $(UPSTREAM)/dylib/util/peicon.h
+	@mkdir -p $(BUILD)
+	$(CC) -arch arm64 -arch x86_64 -mmacosx-version-min=$(MIN_VER) -O2 -Wall -Wextra \
+		-framework Foundation -framework ImageIO -framework CoreGraphics \
+		$(ROOT)/iconmaker.m $(UPSTREAM)/dylib/util/peicon.c -o $@
+	codesign -fs - $@
 
 dobby: $(DOBBY_BUILD)/libdobby.a
 
@@ -98,6 +105,7 @@ payload: all
 	@mkdir -p $(PAYLOAD)/signatures/macos.arm64
 	cp -f $(DYLIB) $(PAYLOAD)/synthehol-steamplay.dylib
 	cp -f $(OVERLAY) $(PAYLOAD)/synthehol-overlay-shim.dylib
+	cp -f $(BUILD)/iconmaker $(PAYLOAD)/iconmaker
 	cp -f $(UPSTREAM)/dylib/feats/compat_run.sh $(PAYLOAD)/run
 	cp -f $(UPSTREAM)/signatures/macos.arm64/*.json $(PAYLOAD)/signatures/macos.arm64/
 	chmod 755 $(PAYLOAD)/run

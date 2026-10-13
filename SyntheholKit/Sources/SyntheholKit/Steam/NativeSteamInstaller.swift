@@ -59,6 +59,9 @@ public enum NativeSteamInstaller {
         )
         try replace(payload.overlayShim, at: support.appending(path: NativeSteamPayload.overlayShimName))
         try replace(payload.runScript, at: support.appending(path: "run"))
+        let iconMaker = support.appending(path: "iconmaker")
+        try replace(payload.iconMaker, at: iconMaker)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: iconMaker.path)
         for signature in payload.signatures {
             try replace(signature, at: support.appending(path: "signatures/macos.arm64")
                 .appending(path: signature.lastPathComponent))

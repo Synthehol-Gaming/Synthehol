@@ -33,6 +33,17 @@ struct NativeSteamView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 compatibilityBanner
+                if model.nativeSteamNeedsRestart {
+                    HStack {
+                        Text("Fully quit and reopen Steam to apply the changes.")
+                        Spacer()
+                        Button(model.restartingNativeSteam ? "Restarting Steam…" : "Restart Steam") {
+                            model.showNativeSteamRestartPrompt = true
+                        }
+                        .disabled(model.restartingNativeSteam)
+                    }
+                    .font(.callout)
+                }
                 if model.nativeSteamGames.isEmpty {
                     ContentUnavailableView {
                         Label("No Mac Steam Games Found", systemImage: "gamecontroller")
@@ -114,6 +125,15 @@ struct NativeSteamView: View {
         }
         .sheet(item: $settingsGame) { game in
             NativeSteamGameSettingsSheet(game: game)
+        }
+        .alert("Steam needs to restart", isPresented: Binding(
+            get: { model.showNativeSteamRestartPrompt },
+            set: { model.showNativeSteamRestartPrompt = $0 }
+        )) {
+            Button("Restart Steam") { Task { await model.restartNativeSteam() } }
+            Button("I'll Restart It Myself", role: .cancel) { }
+        } message: {
+            Text("Fully quit and reopen Steam to load the changes. Synthehol can do this for you, or you can restart it yourself. Restarting Steam may interrupt running games.")
         }
     }
 
@@ -357,6 +377,10 @@ private struct NativeSteamGameSettingsSheet: View {
     let game: InstalledGame
     @State private var nudgeStuckLoading = false
     @State private var performanceProfile: GamePerformanceProfile = .compatibility
+    @State private var rebuilding = false
+    @State private var backup: URL?
+    @State private var rebuildError: String?
+    @State private var showReopenSteamPrompt = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -385,6 +409,28 @@ private struct NativeSteamGameSettingsSheet: View {
             Text("Briefly pauses and resumes the game during startup to work around a Unity/Mono loading freeze under Rosetta. Healthy games only experience a short pause.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Divider()
+            Button(rebuilding ? "Rebuilding Prefix…" : "Rebuild Prefix") {
+                rebuilding = true
+                rebuildError = nil
+                Task {
+                    defer { rebuilding = false }
+                    do {
+                        backup = try await model.rebuildNativePrefix(for: game)
+                        showReopenSteamPrompt = true
+                    }
+                    catch { rebuildError = error.localizedDescription }
+                }
+            }
+            .disabled(rebuilding || model.nativeSteamStore.prefix(for: game) == nil)
+            Text("Quit the game and fully quit Steam first. Keeps a complete prefix backup and preserves game files outside the Windows system folder. Windows system files and registry settings are recreated on the next launch.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let rebuildError { Text(rebuildError).font(.caption).foregroundStyle(.red) }
+            if let backup {
+                Text("Prefix prepared. Reopen Steam and launch this game to finish rebuilding.")
+                    .font(.caption).foregroundStyle(.green)
+                Button("Show Prefix Backup") { NSWorkspace.shared.open(backup) }
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -397,9 +443,17 @@ private struct NativeSteamGameSettingsSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
             }
+            .disabled(rebuilding)
         }
         .padding(20)
         .frame(width: 440)
+        .interactiveDismissDisabled(rebuilding)
+        .alert("Reopen Steam to finish rebuilding", isPresented: $showReopenSteamPrompt) {
+            Button("Open Steam") { model.launchNativeSteam() }
+            Button("I'll Open It Myself", role: .cancel) { }
+        } message: {
+            Text("Steam needs to be reopened before you launch this game. Synthehol can open it for you, or you can do it yourself.")
+        }
         .onAppear {
             let settings = model.nativeGameSettings(for: game)
             nudgeStuckLoading = settings.nudgeStuckLoading

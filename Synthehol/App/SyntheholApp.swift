@@ -2,6 +2,13 @@ import SwiftUI
 import SyntheholKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let icon = NSImage(contentsOf: url) {
+            NSApp.applicationIconImage = icon
+        }
+    }
+
     /// Quitting Synthehol shuts down all bottles so no Wine service processes
     /// linger in the Dock after the app is gone.
     func applicationWillTerminate(_ notification: Notification) {

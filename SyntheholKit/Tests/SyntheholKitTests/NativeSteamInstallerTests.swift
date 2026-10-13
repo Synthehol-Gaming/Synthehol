@@ -10,7 +10,7 @@ private func makeNativePayload(at root: URL) throws -> NativeSteamPayload {
     try FileManager.default.createDirectory(
         at: root.appending(path: "bridge"), withIntermediateDirectories: true
     )
-    for name in [NativeSteamPayload.dylibName, NativeSteamPayload.overlayShimName, "run"] {
+    for name in [NativeSteamPayload.dylibName, NativeSteamPayload.overlayShimName, "run", "iconmaker"] {
         try Data(name.utf8).write(to: root.appending(path: name))
     }
     try Data("{}".utf8).write(to: root.appending(path: "signatures/macos.arm64/test.json"))
@@ -125,6 +125,9 @@ struct NativeSteamInstallerTests {
             path: "Contents/MacOS/\(NativeSteamPayload.dylibName)"
         ))
         #expect(installed == Data(NativeSteamPayload.dylibName.utf8))
+        let iconMaker = support.appending(path: "iconmaker")
+        #expect(try Data(contentsOf: iconMaker) == Data("iconmaker".utf8))
+        #expect(FileManager.default.isExecutableFile(atPath: iconMaker.path))
         #expect(FileManager.default.fileExists(atPath: support.appending(path: "deployment.json").path))
         #expect(FileManager.default.fileExists(atPath: support.appending(
             path: NativeSteamInstaller.backupName

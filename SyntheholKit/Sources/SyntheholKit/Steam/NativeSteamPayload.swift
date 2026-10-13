@@ -11,6 +11,7 @@ public struct NativeSteamPayload: Sendable {
     public let dylib: URL
     public let overlayShim: URL
     public let runScript: URL
+    public let iconMaker: URL
     public let signatures: [URL]
     public let bridge: [URL]
 
@@ -19,6 +20,7 @@ public struct NativeSteamPayload: Sendable {
         dylib = root.appending(path: Self.dylibName)
         overlayShim = root.appending(path: Self.overlayShimName)
         runScript = root.appending(path: "run")
+        iconMaker = root.appending(path: "iconmaker")
         let signatureRoot = root.appending(path: "signatures/macos.arm64")
         signatures = ((try? FileManager.default.contentsOfDirectory(
             at: signatureRoot, includingPropertiesForKeys: nil
@@ -31,7 +33,7 @@ public struct NativeSteamPayload: Sendable {
         ].map { bridgeRoot.appending(path: $0) }
 
         var missing: [String] = []
-        for file in [dylib, overlayShim, runScript]
+        for file in [dylib, overlayShim, runScript, iconMaker]
         where !FileManager.default.fileExists(atPath: file.path(percentEncoded: false)) {
             missing.append(file.lastPathComponent)
         }

@@ -15,6 +15,53 @@ private func nativeManifest(_ id: Int, _ name: String, state: Int = 4) -> Data {
 }
 
 struct NativeSteamStoreTests {
+    @Test func rebuildBacksUpSystemAndPreservesGameData() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appending(path: "synthehol-rebuild-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        let parent = root.appending(path: "steamapps/compatdata/620")
+        let prefix = parent.appending(path: "pfx")
+        for relative in ["drive_c/users/crossover/AppData/Local/Game/save.dat", "drive_c/ProgramData/Game/save.dat", "drive_c/Program Files/Game/save.dat", "drive_c/windows/system32/ntdll.dll", "user.reg", ".update-timestamp"] {
+            let file = prefix.appending(path: relative)
+            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(relative.utf8).write(to: file)
+        }
+        try fm.createSymbolicLink(atPath: prefix.appending(path: "drive_c/users/steamuser").path, withDestinationPath: "crossover")
+        try Data("old-runtime".utf8).write(to: parent.appending(path: "synthehol-build"))
+        let store = NativeSteamStore(steamRoot: root)
+        let game = InstalledGame(store: NativeSteamStore.storeID, storeGameID: "620", name: "Portal 2")
+        let backup = try await store.rebuildPrefix(for: game)
+        for relative in ["drive_c/users/crossover/AppData/Local/Game/save.dat", "drive_c/ProgramData/Game/save.dat", "drive_c/Program Files/Game/save.dat"] {
+            #expect(try Data(contentsOf: prefix.appending(path: relative)) == Data(relative.utf8))
+            #expect(try Data(contentsOf: backup.appending(path: "pfx/\(relative)")) == Data(relative.utf8))
+        }
+        #expect(!fm.fileExists(atPath: prefix.appending(path: "drive_c/windows").path))
+        #expect(!fm.fileExists(atPath: prefix.appending(path: "user.reg").path))
+        #expect(!fm.fileExists(atPath: parent.appending(path: "synthehol-build").path))
+        #expect(try Data(contentsOf: backup.appending(path: "synthehol-build")) == Data("old-runtime".utf8))
+        #expect(fm.fileExists(atPath: backup.appending(path: "pfx/user.reg").path))
+        #expect(fm.fileExists(atPath: prefix.appending(path: "drive_c/users/steamuser/AppData/Local/Game/save.dat").path))
+    }
+
+    @Test func rebuildRefusesOpenPrefixAndLeavesItIntact() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appending(path: "synthehol-rebuild-busy-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        let prefix = root.appending(path: "steamapps/compatdata/620/pfx")
+        try fm.createDirectory(at: prefix, withIntermediateDirectories: true)
+        let file = prefix.appending(path: "user.reg")
+        try Data("unchanged".utf8).write(to: file)
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        let store = NativeSteamStore(steamRoot: root)
+        let game = InstalledGame(store: NativeSteamStore.storeID, storeGameID: "620", name: "Portal 2")
+        do {
+            _ = try await store.rebuildPrefix(for: game)
+            Issue.record("Rebuilt an open prefix")
+        } catch PrefixRebuildError.inUse { }
+        #expect(try Data(contentsOf: file) == Data("unchanged".utf8))
+    }
+
     @Test func discoversDefaultAndExternalNativeLibraries() throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "synthehol-native-steam-\(UUID().uuidString)")

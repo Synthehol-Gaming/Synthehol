@@ -74,6 +74,13 @@ inside the game's prefix. Existing selections may still reference the old tool.
 Wait for Steam's cloud sync to finish before playing; repairing the integration
 does not delete game saves or prefixes.
 
+If a game reports that its prefix needs rebuilding, fully quit the game and
+Steam. In **Mac Steam**, right-click the game and choose **Game Settings… →
+Rebuild Prefix**. Synthehol retains the complete original prefix as a backup and
+copies game data outside the Windows system folder into the replacement. Reopen
+Steam and launch the game to recreate Windows system files and registry settings.
+Use **Show Prefix Backup** in the settings sheet to access the original files.
+
 ## Game Porting Toolkit 4
 
 Synthehol supports Apple's **Game Porting Toolkit 4** and its D3DMetal libraries

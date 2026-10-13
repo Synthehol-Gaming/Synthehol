@@ -58,6 +58,10 @@ final class AppModel {
         }
     }
     var nativeSteamStatus = NativeSteamCompatibilityStatus(deployment: .notInstalled)
+    var showNativeSteamRestartPrompt = false
+    var nativeSteamNeedsRestart = false
+    var restartingNativeSteam = false
+    private var nativeSteamRestartPIDs: Set<pid_t> = []
     let nativeSteamStore = NativeSteamStore()
     let nativeGameSettingsDirectory = SyntheholPaths.applicationSupport
         .appending(path: "NativeSteam/Game Settings")
@@ -244,6 +248,11 @@ final class AppModel {
     }
 
     func refreshNativeSteam() {
+        if nativeSteamNeedsRestart,
+           !nativeSteamRestartPIDs.isEmpty,
+           nativeSteamRestartPIDs.allSatisfy({ NSRunningApplication(processIdentifier: $0)?.isTerminated != false }) {
+            nativeSteamNeedsRestart = false
+        }
         nativeSteamGames = (try? nativeSteamStore.installedGames()) ?? []
         nativeSteamStatus = NativeSteamCompatibilityStatus.inspect()
         loadMetadata(for: nativeSteamGames)
@@ -336,6 +345,16 @@ final class AppModel {
         GameSettings.load(for: game, in: nativeGameSettingsDirectory)
     }
 
+    func rebuildNativePrefix(for game: InstalledGame) async throws -> URL {
+        guard NSRunningApplication.runningApplications(withBundleIdentifier: "com.valvesoftware.steam").isEmpty else {
+            throw PrefixRebuildError.inUse
+        }
+        let store = nativeSteamStore
+        return try await Task.detached(priority: .userInitiated) {
+            try await store.rebuildPrefix(for: game)
+        }.value
+    }
+
     func saveNativeGameSettings(_ settings: GameSettings, for game: InstalledGame) {
         do {
             try settings.save(for: game, in: nativeGameSettingsDirectory)
@@ -367,6 +386,7 @@ final class AppModel {
             let payload = try NativeSteamPayload.bundled()
             try await NativeSteamInstaller.install(payload: payload, bottles: bottles)
             nativeSteamStatus = NativeSteamCompatibilityStatus.inspect()
+            requestNativeSteamRestart()
         } catch NativeSteamInstallError.appManagementPermissionRequired {
             needsAppManagementPermission = true
             lastError = NativeSteamInstallError.appManagementPermissionRequired.localizedDescription
@@ -386,9 +406,52 @@ final class AppModel {
         do {
             try await NativeSteamInstaller.repair()
             nativeSteamStatus = NativeSteamCompatibilityStatus.inspect()
+            requestNativeSteamRestart()
         } catch {
             lastError = "Couldn't repair Steam: \(error.localizedDescription)"
         }
+    }
+
+    private func requestNativeSteamRestart() {
+        nativeSteamRestartPIDs = Set(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.valvesoftware.steam"
+        ).map(\.processIdentifier))
+        nativeSteamNeedsRestart = true
+        showNativeSteamRestartPrompt = true
+    }
+
+    /// Called only after the user chooses Restart Steam. Never force-quit it.
+    func restartNativeSteam() async {
+        guard !restartingNativeSteam else { return }
+        restartingNativeSteam = true
+        defer { restartingNativeSteam = false }
+        let applications = NSRunningApplication.runningApplications(withBundleIdentifier: "com.valvesoftware.steam")
+        for application in applications where !application.terminate() {
+            lastError = "Steam couldn't be quit. Fully quit and reopen Steam yourself to apply the changes."
+            return
+        }
+        for _ in 0..<120 {
+            if applications.allSatisfy(\.isTerminated) {
+                do {
+                    let result = try await ProcessRunner.run(
+                        executable: URL(filePath: "/usr/bin/open"),
+                        arguments: ["-a", nativeSteamStore.steamApplication.path]
+                    )
+                    guard result.exitCode == 0 else {
+                        lastError = "Steam quit, but couldn't reopen. Open Steam yourself to finish restarting."
+                        return
+                    }
+                    nativeSteamNeedsRestart = false
+                    return
+                } catch {
+                    lastError = "Steam couldn't reopen: \(error.localizedDescription)"
+                    return
+                }
+            }
+            do { try await Task.sleep(for: .milliseconds(250)) }
+            catch { return }
+        }
+        lastError = "Steam is still running. Finish closing Steam and reopen it yourself to apply the changes."
     }
 
     func nativePoster(for game: InstalledGame) async -> NSImage? {

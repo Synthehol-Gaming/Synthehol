@@ -200,7 +200,7 @@ refuse_foreign_prefix() {
   have=$(prefix_machine) || return 0
   [ "$have" = "$want" ] && return 0
   echo "=== prefix ntdll is $have and this compatibility tool wants $want, rebuild the prefix in Synthehol ===" >> "$log" 2>&1 || true
-  show_alert "This game needs its prefix rebuilt" "This game originally ran under $(tool_name "$have"), but $(tool_name "$want") is present now. The prefix needs to be rebuilt in Synthehol in order to run the game. You will not lose game saves by rebuilding the prefix."
+  show_alert "This game needs its prefix rebuilt" "This game originally ran under $(tool_name "$have"), but $(tool_name "$want") is present now. Quit this game and fully quit Steam. In Synthehol, open Mac Steam, right-click the game, choose Game Settings, then Rebuild Prefix. Synthehol keeps a complete backup and copies game data into the replacement prefix. Reopen Steam and launch the game afterward."
   exit 1
 }
 
@@ -240,10 +240,32 @@ refuse_other_build() {
   else
     last_wine_build
   fi
+  # Performance variants can retain exactly the same Wine core. Compare the
+  # actual prefix-facing binaries before requiring a rebuild; names alone do
+  # not establish that a prefix is incompatible.
+  if [ -n "$had_build" ] && [ "$had_build" != "$np_build" ]; then
+    case "$had_build" in *[!A-Za-z0-9.-]*) equivalent=0 ;;
+      *)
+        previous="$np_support/runners/crossover-$had_build/CrossOver"
+        equivalent=1
+        for component in lib/wine/x86_64-unix/wine bin/wineserver \
+          lib/wine/x86_64-unix/ntdll.so lib/wine/x86_64-unix/win32u.so \
+          lib/wine/x86_64-windows/ntdll.dll lib/wine/x86_64-windows/win32u.dll \
+          lib/wine/x86_64-windows/kernel32.dll lib/wine/x86_64-windows/kernelbase.dll \
+          lib/wine/x86_64-windows/wineboot.exe share/wine/wine.inf; do
+          cmp -s "$previous/$component" "$CX_ROOT/$component" || equivalent=0
+        done
+        ;;
+    esac
+    if [ "$equivalent" = 1 ]; then
+      echo "=== equivalent Wine core verified for $had_build and $np_build; keeping prefix ===" >> "$log" 2>&1 || true
+      had_build=""
+    fi
+  fi
   if [ -n "$had_build" ] && [ "$had_build" != "$np_build" ]; then
     echo "=== prefix was last run by build $had_build and this compatibility tool runs $np_build, rebuild the prefix in Synthehol ===" >> "$log" 2>&1 || true
     had_display=$(alert_safe "${had_display:-CrossOver build $had_build}")
-    show_alert "This game needs its prefix rebuilt" "This game's prefix was last run by $had_display, and this compatibility tool runs $(alert_safe "$np_display"). Rebuild the prefix in Synthehol to run it here, or pick $had_display again in the game's Compatibility settings. You will not lose game saves by rebuilding the prefix."
+    show_alert "This game needs its prefix rebuilt" "This game's prefix was last run by $had_display, and this compatibility tool runs $(alert_safe "$np_display"). Quit this game and fully quit Steam. In Synthehol, open Mac Steam, right-click the game, choose Game Settings, then Rebuild Prefix. Synthehol keeps a complete backup and copies game data into the replacement prefix. Reopen Steam and launch the game afterward. Alternatively, select $had_display in Steam's Properties > Compatibility settings if it is available."
     exit 1
   fi
 }

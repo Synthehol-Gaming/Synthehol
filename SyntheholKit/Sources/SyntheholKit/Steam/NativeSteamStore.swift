@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// The user's macOS Steam installation. Windows games in this store are run by
 /// the native client through Synthehol's embedded Steam-Play compatibility layer.
@@ -85,6 +86,76 @@ public struct NativeSteamStore: Sendable {
             .first { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }
     }
 
+    /// Keep a complete original prefix and stage user data for Wine to rebuild
+    /// its system files on the next Steam launch. Never modify the original.
+    public func rebuildPrefix(for game: InstalledGame) async throws -> URL {
+        guard game.store == Self.storeID, !game.storeGameID.isEmpty,
+              game.storeGameID.allSatisfy(\.isNumber), let prefix = prefix(for: game)
+        else { throw PrefixRebuildError.missing }
+        let users = prefix.appending(path: "drive_c/users")
+        let fm = FileManager.default
+        guard !isLink(prefix), !isLink(prefix.deletingLastPathComponent()),
+              !isLink(prefix.appending(path: "drive_c")) else {
+            throw PrefixRebuildError.linkedPrefix
+        }
+        let inUse = try await ProcessRunner.run(
+            executable: URL(filePath: "/usr/sbin/lsof"),
+            arguments: ["-t", "+D", prefix.path]
+        )
+        guard inUse.exitCode == 1 && inUse.standardOutput.isEmpty else {
+            throw PrefixRebuildError.inUse
+        }
+        // Cooperate with the wrapper's POSIX prefix-preparation lock.
+        let parent = prefix.deletingLastPathComponent()
+        let fd = open(parent.appending(path: ".synthehol-prefix.lock").path,
+                      O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { throw PrefixRebuildError.inUse }
+        defer { close(fd) }
+        guard lockf(fd, F_TLOCK, 0) == 0 else { throw PrefixRebuildError.inUse }
+        defer { _ = lockf(fd, F_ULOCK, 0) }
+        let token = UUID().uuidString
+        let staging = parent.appending(path: ".pfx-rebuild-\(token)")
+        let backup = parent.appending(path: "prefix-backup-\(token)")
+        try fm.createDirectory(at: staging.appending(path: "drive_c"), withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: staging) }
+        let drive = prefix.appending(path: "drive_c")
+        // Preserve profiles (AppData, Documents, Saved Games), ProgramData,
+        // installed applications, and saves placed elsewhere on C:. Wine's
+        // system directory and registries remain in the complete backup.
+        if fm.fileExists(atPath: users.path) {
+            try fm.copyItem(at: users, to: staging.appending(path: "drive_c/users"))
+        }
+        for item in try fm.contentsOfDirectory(at: drive, includingPropertiesForKeys: nil)
+        where !["users", "windows"].contains(item.lastPathComponent.lowercased()) {
+            try fm.copyItem(at: item, to: staging.appending(path: "drive_c/\(item.lastPathComponent)"))
+        }
+        try fm.createDirectory(at: backup, withIntermediateDirectories: false)
+        do {
+            try fm.moveItem(at: prefix, to: backup.appending(path: "pfx"))
+            for name in ["synthehol-build", "synthehol-game-drive"] {
+                let file = parent.appending(path: name)
+                if fm.fileExists(atPath: file.path) {
+                    try fm.moveItem(at: file, to: backup.appending(path: name))
+                }
+            }
+            try fm.moveItem(at: staging, to: prefix)
+        } catch {
+            if !fm.fileExists(atPath: prefix.path), fm.fileExists(atPath: backup.appending(path: "pfx").path) {
+                try fm.moveItem(at: backup.appending(path: "pfx"), to: prefix)
+                for name in ["synthehol-build", "synthehol-game-drive"] {
+                    let file = backup.appending(path: name)
+                    if fm.fileExists(atPath: file.path) { try fm.moveItem(at: file, to: parent.appending(path: name)) }
+                }
+            }
+            throw error
+        }
+        return backup
+    }
+
+    private func isLink(_ url: URL) -> Bool {
+        (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
+    }
+
     /// Logs written by the Steam Play wrapper and the Wine launcher. The first
     /// lives beside the Proton-style prefix; the second captures the game's
     /// stdout/stderr after it enters the generated Game Mode app bundle.
@@ -138,6 +209,17 @@ public struct NativeSteamStore: Sendable {
         )
         guard result.exitCode == 0 else {
             throw NativeSteamError.launchFailed(result.standardError)
+        }
+    }
+}
+
+public enum PrefixRebuildError: Error, LocalizedError {
+    case missing, inUse, linkedPrefix
+    public var errorDescription: String? {
+        switch self {
+        case .missing: "This game has no compatibility prefix to rebuild."
+        case .inUse: "Quit the game and fully quit Steam before rebuilding its prefix."
+        case .linkedPrefix: "This prefix uses a custom linked location. Rebuild it manually to preserve that layout."
         }
     }
 }
