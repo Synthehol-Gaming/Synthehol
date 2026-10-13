@@ -58,6 +58,17 @@ final class AppModel {
         }
     }
     var nativeSteamStatus = NativeSteamCompatibilityStatus(deployment: .notInstalled)
+    let compatibilityFixStore = CompatibilityFixStore()
+
+    func requireIdleForCompatibilityFix(in bottle: Bottle?) throws {
+        if let bottle {
+            guard !steamRunning.contains(bottle.id) else { throw CompatibilityFixError.busy }
+        } else {
+            guard NSRunningApplication.runningApplications(withBundleIdentifier: "com.valvesoftware.steam").isEmpty else {
+                throw CompatibilityFixError.busy
+            }
+        }
+    }
     var showNativeSteamRestartPrompt = false
     var nativeSteamNeedsRestart = false
     var restartingNativeSteam = false

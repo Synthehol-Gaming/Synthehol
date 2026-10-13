@@ -377,6 +377,10 @@ struct AvailableGameTile: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+            if !CompatibilityFixCatalog.recommendations(for: game).isEmpty {
+                Label("Known compatibility fix", systemImage: "wrench.and.screwdriver")
+                    .font(.caption).foregroundStyle(.orange)
+            }
         }
         .onHover { hovering = $0 }
         .task(id: game.id) {
@@ -545,6 +549,7 @@ struct GameSettingsSheet: View {
     @State private var environmentText = ""
     @State private var nudgeStuckLoading = false
     @State private var performanceProfile: GamePerformanceProfile = .compatibility
+    @State private var showCompatibilityFixes = false
 
     private var isCustomGame: Bool { game.store == CustomGameStore.storeID }
     private var trimmedName: String {
@@ -555,6 +560,11 @@ struct GameSettingsSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(game.name)
                 .font(.title3.bold())
+            Button("Compatibility Fixes…") { showCompatibilityFixes = true }
+            if let fix = CompatibilityFixCatalog.recommendations(for: game).first {
+                Text("Recommended for startup issues: \(fix.title). Review Compatibility Fixes to apply it yourself.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
 
             Form {
                 if isCustomGame {
@@ -609,6 +619,7 @@ struct GameSettingsSheet: View {
         }
         .padding(20)
         .frame(width: 440)
+        .sheet(isPresented: $showCompatibilityFixes) { CompatibilityFixesSheet(game: game, bottle: bottle) }
         .onAppear(perform: load)
     }
 

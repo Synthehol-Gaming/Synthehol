@@ -24,6 +24,38 @@ The initial runtime target follows the source and patch ordering documented by
 5. CrossOver 26.3 Wine sources, followed by Recall's Wine patches in their
    documented order
 
+The hash-pinned Skyrim resource lifetime fix in
+`Compatibility/dxmt-skyrim-destroyed-object-release.patch` is optional. Build it
+explicitly with `apply-dxmt-patches.sh /path/to/source --fix=dxmt-resource-lifetime`;
+the default patch sequence leaves it out. Provenance is recorded in
+`Compatibility/SOURCES.json`. The patch makes
+the resource/view base classes tolerate Skyrim's extra `Release` call after
+destruction, avoiding the pure-virtual abort described in
+[DXMT issue #231](https://github.com/3Shain/dxmt/issues/231).
+
+Local validation on 2026-10-13: rebuilt the x64 DXMT PE modules at the pinned
+revision with the existing Recall patches and this fix. The diagnostic build
+linked against the installed `winemetal.dll` exports and reused the installed
+renderer’s embedded Metal shader library (unchanged by this C++ patch), because
+the local Xcode installation lacked the Metal toolchain component. With the
+patched modules selected only for Skyrim's launcher/game executables, Skyrim
+reached the main menu and the user confirmed it. Gameplay has not been validated.
+The test DLLs are installed locally, not distributed with Synthehol. Full runtime
+distribution still requires the reproducible clean-source build described below.
+
+Synthehol's compatibility catalog tracks versioned patched renderers independently
+of game recommendations. Users import a fix package folder containing
+`FixPackage.json` (`fixID` and `version`) and the catalog-pinned DLLs. Importing is
+inert. From a game's settings they explicitly select **Compatibility Fixes →
+Apply to Game Executable** to try a version, including with games absent from the
+affected-games list. DLLs go beside the selected executable and registry overrides
+are scoped to its filename. **Remove Fix** restores the backed-up files and values,
+preserving unrelated settings and refusing to overwrite subsequent user changes.
+Packages are rejected if their hashes or the runtime's Wine Metal bridge differ
+from the catalog. New verified versions need a new catalog entry; a user-supplied
+manifest cannot redefine trusted checksums. No discovery, recommendation, import,
+or launch automatically enables a fix.
+
 The selected patches are vendored under `Recall/patches`; `Recall/LICENSE` and
 `Recall/NOTICE` are retained verbatim. Run `./verify.sh` before every build to
 verify all patch bytes against `Recall/patches.sha256` and validate the runtime

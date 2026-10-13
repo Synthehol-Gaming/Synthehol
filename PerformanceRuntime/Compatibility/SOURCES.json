@@ -1,0 +1,15 @@
+{
+  "patches": [
+    {
+      "file": "dxmt-skyrim-destroyed-object-release.patch",
+      "repository": "https://github.com/codeWonderland/neutron",
+      "commit": "aabc0dc8b394b46656548d88c1d4cf372d0f0fec",
+      "path": "tools/dxmt-patch/destroyed-object-release.patch",
+      "sha256": "7257939ce4d2968ab801da15b6775ea5beaeb3873c8f4745f6076ece30316dd5",
+      "issue": "https://github.com/3Shain/dxmt/issues/231",
+      "applies_after": "Recall/patches/dxmt-portable-metal.patch",
+      "author": "codeWonderland",
+      "target_license": "LGPL-2.1-or-later (DXMT)"
+    }
+  ]
+}

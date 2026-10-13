@@ -21,3 +21,8 @@ do
 done
 
 echo "Performance runtime inputs and v1 capability contract verified."
+
+(
+  cd "$root/Compatibility"
+  printf '%s\n' '7257939ce4d2968ab801da15b6775ea5beaeb3873c8f4745f6076ece30316dd5  dxmt-skyrim-destroyed-object-release.patch' | shasum -a 256 -c -
+)

@@ -30,6 +30,13 @@ Windows applications.
 
 ## Performance runtime
 
+Compatibility fixes are an explicit, versioned catalog, separate from recommended
+games. Recommendations are keyed by store/app ID and never mutate settings.
+Users may import a checksum-pinned patched renderer and choose to apply it to any
+compatible game's executable. Apply keeps file/registry backups; remove restores
+only that fix's changes. Runtime bridge hashes gate binary compatibility. Fixes
+must never be applied automatically by discovery, launch, import, or runtime builds.
+
 Synthehol's performance-runtime work is informed by and will reuse the Apache-2.0
 or upstream-licensed patches from [AsherJN/recall](https://github.com/AsherJN/recall).
 The UI and launch contract are intentionally separate from the patched binaries:

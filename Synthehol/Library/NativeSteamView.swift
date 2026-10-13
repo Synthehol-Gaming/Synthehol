@@ -345,6 +345,10 @@ private struct NativeSteamGameTile: View {
                 .scaleEffect(hovering ? 1.03 : 1)
                 .animation(.easeOut(duration: 0.12), value: hovering)
             Text(game.name).font(.callout.weight(.medium)).lineLimit(1)
+            if !CompatibilityFixCatalog.recommendations(for: game).isEmpty {
+                Label("Known compatibility fix", systemImage: "wrench.and.screwdriver")
+                    .font(.caption).foregroundStyle(.orange)
+            }
         }
         .onHover { hovering = $0 }
         .task(id: game.id) { _ = await model.nativePoster(for: game) }
@@ -381,10 +385,16 @@ private struct NativeSteamGameSettingsSheet: View {
     @State private var backup: URL?
     @State private var rebuildError: String?
     @State private var showReopenSteamPrompt = false
+    @State private var showCompatibilityFixes = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(game.name).font(.title3.bold())
+            Button("Compatibility Fixes…") { showCompatibilityFixes = true }
+            if let fix = CompatibilityFixCatalog.recommendations(for: game).first {
+                Text("Recommended for startup issues: \(fix.title). Review Compatibility Fixes to apply it yourself.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             Picker("Performance", selection: $performanceProfile) {
                 ForEach(GamePerformanceProfile.allCases) { profile in
                     Text(profile.title).tag(profile)
@@ -448,6 +458,7 @@ private struct NativeSteamGameSettingsSheet: View {
         .padding(20)
         .frame(width: 440)
         .interactiveDismissDisabled(rebuilding)
+        .sheet(isPresented: $showCompatibilityFixes) { CompatibilityFixesSheet(game: game, bottle: nil) }
         .alert("Reopen Steam to finish rebuilding", isPresented: $showReopenSteamPrompt) {
             Button("Open Steam") { model.launchNativeSteam() }
             Button("I'll Open It Myself", role: .cancel) { }
